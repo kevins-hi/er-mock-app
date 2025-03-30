@@ -63,17 +63,9 @@ function App() {
       return;
     }
     const video = videoRef.current;
-    // if (webcamRunning) {
-    //   setWebcamRunning(false);
-    //   if (webcamButtonRef.current) {
-    //     webcamButtonRef.current.innerText = "ENABLE PREDICTIONS";
-    //   }
-    // } else {
-    //   setWebcamRunning(true);
-    //   if (webcamButtonRef.current) {
-    //     webcamButtonRef.current.innerText = "DISABLE PREDICTIONS";
-    //   }
-    // }
+    if (webcamButtonRef.current) {
+      webcamButtonRef.current.classList.add("removed");
+    }
 
     // Request webcam access.
     const constraints = { video: true };
@@ -149,7 +141,7 @@ function App() {
             { color: "#30FF30" }
           );
         });
-        drawBlendShapes(videoBlendShapesRef.current, results.faceBlendshapes);
+        // drawBlendShapes(videoBlendShapesRef.current, results.faceBlendshapes);
       }
     }
     if (webcamRunning) {
