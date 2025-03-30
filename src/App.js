@@ -1,11 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
-import { FaceLandmarker, FilesetResolver, DrawingUtils } from "@mediapipe/tasks-vision";
+
+// Import MediaPipe Tasks for Vision. You can install this package via npm
+// (if available) or load it externally. For this example, we assume it’s installed.
+import { FaceLandmarker, FilesetResolver, DrawingUtils } from "@mediapipe/tasks-vision"; 
 
 function App() {
   const [faceLandmarker, setFaceLandmarker] = useState(null);
   const [runningMode, setRunningMode] = useState("VIDEO");
-  const [webcamRunning, setWebcamRunning] = useState(false);
+  const [webcamRunning, setWebcamRunning] = useState(true);
   const demosSectionRef = useRef(null);
   const videoBlendShapesRef = useRef(null);
   const videoRef = useRef(null);
@@ -59,19 +62,18 @@ function App() {
       console.log("Wait! faceLandmarker not loaded yet.");
       return;
     }
-
     const video = videoRef.current;
-    if (webcamRunning) {
-      setWebcamRunning(false);
-      if (webcamButtonRef.current) {
-        webcamButtonRef.current.innerText = "ENABLE PREDICTIONS";
-      }
-    } else {
-      setWebcamRunning(true);
-      if (webcamButtonRef.current) {
-        webcamButtonRef.current.innerText = "DISABLE PREDICTIONS";
-      }
-    }
+    // if (webcamRunning) {
+    //   setWebcamRunning(false);
+    //   if (webcamButtonRef.current) {
+    //     webcamButtonRef.current.innerText = "ENABLE PREDICTIONS";
+    //   }
+    // } else {
+    //   setWebcamRunning(true);
+    //   if (webcamButtonRef.current) {
+    //     webcamButtonRef.current.innerText = "DISABLE PREDICTIONS";
+    //   }
+    // }
 
     // Request webcam access.
     const constraints = { video: true };
