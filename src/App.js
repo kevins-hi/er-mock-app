@@ -10,7 +10,6 @@ function App() {
   const [runningMode, setRunningMode] = useState("VIDEO");
   const [webcamRunning, setWebcamRunning] = useState(true);
   const demosSectionRef = useRef(null);
-  const videoBlendShapesRef = useRef(null);
   const videoRef = useRef(null);
   const outputCanvasRef = useRef(null);
   const webcamButtonRef = useRef(null);
@@ -28,7 +27,7 @@ function App() {
             "models/face_landmarker.task",
           delegate: "GPU",
         },
-        outputFaceBlendshapes: true,
+        outputFaceBlendshapes: false,
         runningMode,
         numFaces: 1,
       });
@@ -40,21 +39,6 @@ function App() {
     }
     createFaceLandmarker();
   }, []);
-
-  // Draw blend shapes in the provided element.
-  const drawBlendShapes = (element, blendShapes) => {
-    if (!blendShapes.length) return;
-    let htmlMaker = "";
-    blendShapes[0].categories.forEach((shape) => {
-      htmlMaker += `
-        <li class="blend-shapes-item">
-          <span class="blend-shapes-label">${shape.displayName || shape.categoryName}</span>
-          <span class="blend-shapes-value" style="width: calc(${+shape.score * 100}% - 120px)">${(+shape.score).toFixed(4)}</span>
-        </li>
-      `;
-    });
-    element.innerHTML = htmlMaker;
-  };
 
   // Enable or disable the webcam and start predictions.
   const enableCam = async () => {
@@ -141,7 +125,6 @@ function App() {
             { color: "#30FF30" }
           );
         });
-        // drawBlendShapes(videoBlendShapesRef.current, results.faceBlendshapes);
       }
     }
     if (webcamRunning) {
@@ -185,7 +168,6 @@ function App() {
             ></canvas>
           </div>
         </div>
-        <ul className="blend-shapes-list" ref={videoBlendShapesRef}></ul>
       </section>
     </div>
   );
