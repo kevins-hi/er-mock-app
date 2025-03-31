@@ -184,7 +184,7 @@ function App() {
       canvasCtx.beginPath();
       canvasCtx.moveTo(leftPupil[0], leftPupil[1]);
       canvasCtx.lineTo(gaze[0], gaze[1]);
-      canvasCtx.strokeStyle = "red";
+      canvasCtx.strokeStyle = "blue";
       canvasCtx.lineWidth = 2;
       canvasCtx.stroke();
 
@@ -335,9 +335,6 @@ function App() {
 
   return (
     <div className="App">
-      <h1>
-        Face landmark detection using the MediaPipe FaceLandmarker task
-      </h1>
       <section id="demos" ref={demosSectionRef} className="invisible">
         <h2>Demo: Webcam continuous face landmarks detection</h2>
         <p>
