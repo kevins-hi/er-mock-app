@@ -79,11 +79,11 @@ function App() {
     // Clean up temporary matrices.
     X.delete(); Xt.delete(); XtX.delete(); XtX_inv.delete(); XtY.delete(); A.delete();
     return { success: true, transformation: T };
-  }
+  };
 
   // -----------------------------
   // Draw gaze direction based on landmarks.
-  // This function converts the Python logic to JS using OpenCV.js.
+  // Updated to compute gaze for both left and right pupils.
   // -----------------------------
   const drawGaze = async (frame, landmarks, canvasCtx) => {
     // Use window.cv since OpenCV.js attaches to window.
@@ -144,60 +144,114 @@ function App() {
     let tvec = new cv.Mat();
     cv.solvePnP(modelPoints, imagePointsMat, cameraMatrix, distCoeffs, rvec, tvec, false, cv.SOLVEPNP_ITERATIVE);
 
-    // Get left pupil coordinates (using landmark index 468)
+    // Extract pupil coordinates
     const leftPupil = relative(landmarks[468], frameShape);
+    const rightPupil = relative(landmarks[473], frameShape);
 
     const { success, transformation } = estimateAffine3DCustom(cv, imagePoints1Mat, modelPoints);
     if (success) {
-      let pupilVec = cv.matFromArray(4, 1, cv.CV_64F, [leftPupil[0], leftPupil[1], 0, 1]);
-      let pupilWorld = new cv.Mat();
-      cv.gemm(transformation, pupilVec, 1, new cv.Mat(), 0, pupilWorld);
+      // ---- Left Eye Gaze Estimation ----
+      let leftPupilVec = cv.matFromArray(4, 1, cv.CV_64F, [leftPupil[0], leftPupil[1], 0, 1]);
+      let leftPupilWorld = new cv.Mat();
+      cv.gemm(transformation, leftPupilVec, 1, new cv.Mat(), 0, leftPupilWorld);
 
-      let diff = new cv.Mat();
-      let pupilWorld3 = pupilWorld.rowRange(0, 3);
-      cv.subtract(pupilWorld3, eyeBallCenterLeft, diff);
+      let diffLeft = new cv.Mat();
+      let leftPupilWorld3 = leftPupilWorld.rowRange(0, 3);
+      cv.subtract(leftPupilWorld3, eyeBallCenterLeft, diffLeft);
 
-      let scaledDiff = new cv.Mat();
-      let broadcastMat = new cv.Mat(diff.rows, diff.cols, diff.type());
-      broadcastMat.setTo(new cv.Scalar(10));
-      cv.multiply(diff, broadcastMat, scaledDiff);
-      broadcastMat.delete();
+      let scaledDiffLeft = new cv.Mat();
+      let broadcastMatLeft = new cv.Mat(diffLeft.rows, diffLeft.cols, diffLeft.type());
+      broadcastMatLeft.setTo(new cv.Scalar(10));
+      cv.multiply(diffLeft, broadcastMatLeft, scaledDiffLeft);
+      broadcastMatLeft.delete();
 
-      let S = new cv.Mat();
-      cv.add(eyeBallCenterLeft, scaledDiff, S);
+      let SLeft = new cv.Mat();
+      cv.add(eyeBallCenterLeft, scaledDiffLeft, SLeft);
 
-      let S_point = new cv.Mat();
-      cv.projectPoints(S, rvec, tvec, cameraMatrix, distCoeffs, S_point);
-      let eyePupil2D = [S_point.data64F[0], S_point.data64F[1]];
+      let S_pointLeft = new cv.Mat();
+      cv.projectPoints(SLeft, rvec, tvec, cameraMatrix, distCoeffs, S_pointLeft);
+      let eyePupil2DLeft = [S_pointLeft.data64F[0], S_pointLeft.data64F[1]];
 
-      let headPoint = cv.matFromArray(3, 1, cv.CV_64F, [pupilWorld.data64F[0], pupilWorld.data64F[1], 40]);
-      let headPose = new cv.Mat();
-      cv.projectPoints(headPoint, rvec, tvec, cameraMatrix, distCoeffs, headPose);
-      let headPose2D = [headPose.data64F[0], headPose.data64F[1]];
+      let headPointLeft = cv.matFromArray(3, 1, cv.CV_64F, [leftPupilWorld.data64F[0], leftPupilWorld.data64F[1], 40]);
+      let headPoseLeft = new cv.Mat();
+      cv.projectPoints(headPointLeft, rvec, tvec, cameraMatrix, distCoeffs, headPoseLeft);
+      let headPose2DLeft = [headPoseLeft.data64F[0], headPoseLeft.data64F[1]];
 
-      let gaze = [
-        leftPupil[0] + (eyePupil2D[0] - leftPupil[0]) - (headPose2D[0] - leftPupil[0]),
-        leftPupil[1] + (eyePupil2D[1] - leftPupil[1]) - (headPose2D[1] - leftPupil[1])
+      let gazeLeft = [
+        leftPupil[0] + (eyePupil2DLeft[0] - leftPupil[0]) - (headPose2DLeft[0] - leftPupil[0]),
+        leftPupil[1] + (eyePupil2DLeft[1] - leftPupil[1]) - (headPose2DLeft[1] - leftPupil[1])
       ];
 
-      // Draw the gaze line.
+      // Draw left gaze line.
       canvasCtx.beginPath();
       canvasCtx.moveTo(leftPupil[0], leftPupil[1]);
-      canvasCtx.lineTo(gaze[0], gaze[1]);
+      canvasCtx.lineTo(gazeLeft[0], gazeLeft[1]);
       canvasCtx.strokeStyle = "blue";
       canvasCtx.lineWidth = 2;
       canvasCtx.stroke();
 
-      pupilVec.delete();
-      pupilWorld.delete();
-      diff.delete();
-      scaledDiff.delete();
-      S.delete();
-      S_point.delete();
-      headPoint.delete();
-      headPose.delete();
+      // Clean up left eye matrices.
+      leftPupilVec.delete();
+      leftPupilWorld.delete();
+      diffLeft.delete();
+      scaledDiffLeft.delete();
+      SLeft.delete();
+      S_pointLeft.delete();
+      headPointLeft.delete();
+      headPoseLeft.delete();
+
+      // ---- Right Eye Gaze Estimation ----
+      let rightPupilVec = cv.matFromArray(4, 1, cv.CV_64F, [rightPupil[0], rightPupil[1], 0, 1]);
+      let rightPupilWorld = new cv.Mat();
+      cv.gemm(transformation, rightPupilVec, 1, new cv.Mat(), 0, rightPupilWorld);
+
+      let diffRight = new cv.Mat();
+      let rightPupilWorld3 = rightPupilWorld.rowRange(0, 3);
+      cv.subtract(rightPupilWorld3, eyeBallCenterRight, diffRight);
+
+      let scaledDiffRight = new cv.Mat();
+      let broadcastMatRight = new cv.Mat(diffRight.rows, diffRight.cols, diffRight.type());
+      broadcastMatRight.setTo(new cv.Scalar(10));
+      cv.multiply(diffRight, broadcastMatRight, scaledDiffRight);
+      broadcastMatRight.delete();
+
+      let SRight = new cv.Mat();
+      cv.add(eyeBallCenterRight, scaledDiffRight, SRight);
+
+      let S_pointRight = new cv.Mat();
+      cv.projectPoints(SRight, rvec, tvec, cameraMatrix, distCoeffs, S_pointRight);
+      let eyePupil2DRight = [S_pointRight.data64F[0], S_pointRight.data64F[1]];
+
+      let headPointRight = cv.matFromArray(3, 1, cv.CV_64F, [rightPupilWorld.data64F[0], rightPupilWorld.data64F[1], 40]);
+      let headPoseRight = new cv.Mat();
+      cv.projectPoints(headPointRight, rvec, tvec, cameraMatrix, distCoeffs, headPoseRight);
+      let headPose2DRight = [headPoseRight.data64F[0], headPoseRight.data64F[1]];
+
+      let gazeRight = [
+        rightPupil[0] + (eyePupil2DRight[0] - rightPupil[0]) - (headPose2DRight[0] - rightPupil[0]),
+        rightPupil[1] + (eyePupil2DRight[1] - rightPupil[1]) - (headPose2DRight[1] - rightPupil[1])
+      ];
+
+      // Draw right gaze line.
+      canvasCtx.beginPath();
+      canvasCtx.moveTo(rightPupil[0], rightPupil[1]);
+      canvasCtx.lineTo(gazeRight[0], gazeRight[1]);
+      canvasCtx.strokeStyle = "blue";
+      canvasCtx.lineWidth = 2;
+      canvasCtx.stroke();
+
+      // Clean up right eye matrices.
+      rightPupilVec.delete();
+      rightPupilWorld.delete();
+      diffRight.delete();
+      scaledDiffRight.delete();
+      SRight.delete();
+      S_pointRight.delete();
+      headPointRight.delete();
+      headPoseRight.delete();
     }
 
+    // Clean up common matrices.
     imagePointsMat.delete();
     imagePoints1Mat.delete();
     modelPoints.delete();
@@ -207,7 +261,7 @@ function App() {
     distCoeffs.delete();
     rvec.delete();
     tvec.delete();
-    transformation.delete();
+    if (transformation) transformation.delete();
   };
 
   // -----------------------------
@@ -258,7 +312,6 @@ function App() {
   // Continuously predict using the webcam stream.
   // -----------------------------
   const predictWebcam = async () => {
-    // console.log((await window.cv).projectPoints);
     const video = videoRef.current;
     const canvasElement = outputCanvasRef.current;
     const canvasCtx = canvasElement.getContext("2d");
@@ -323,7 +376,7 @@ function App() {
             { color: "#30FF30" }
           );
 
-          // Gaze estimation
+          // Gaze estimation for both eyes.
           drawGaze(video, landmarks, canvasCtx);
         });
       }
