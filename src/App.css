@@ -12,6 +12,7 @@ body {
   color: #3d3d3d;
   --mdc-theme-primary: #007f8b;
   --mdc-theme-on-primary: #f1f3f4;
+  transition: background-color 0.3s ease;
 }
 
 h1 {

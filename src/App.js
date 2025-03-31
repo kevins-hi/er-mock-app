@@ -280,12 +280,13 @@ function App() {
     // Adjust this threshold based on calibration.
     const threshold = 60; 
     const isLooking = magnitude < threshold;
-  
+    document.body.style.backgroundColor = isLooking ? "white" : "red";
+
     // Display the boolean on the canvas.
     canvasCtx.save();
     canvasCtx.setTransform(-1, 0, 0, 1, canvasCtx.canvas.width, 0);
     canvasCtx.font = "24px Arial";
-    canvasCtx.fillStyle = "red";
+    canvasCtx.fillStyle = "blue";
     canvasCtx.fillText(`Looking: ${isLooking}`, canvasCtx.canvas.width - 390, 30);
     canvasCtx.restore();    
   
