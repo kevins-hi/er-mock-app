@@ -8,35 +8,11 @@ function App() {
   const [faceLandmarker, setFaceLandmarker] = useState(null);
   const [runningMode, setRunningMode] = useState("VIDEO");
   const [webcamRunning, setWebcamRunning] = useState(true);
-  const [opencvReady, setOpencvReady] = useState(false);
   const demosSectionRef = useRef(null);
   const videoRef = useRef(null);
   const outputCanvasRef = useRef(null);
   const webcamButtonRef = useRef(null);
   const lastVideoTimeRef = useRef(-1);
-
-  // -----------------------------
-  // Wait for OpenCV.js to load
-  // -----------------------------
-  useEffect(() => {
-    if (!window.cv) {
-      const script = document.createElement('script');
-      script.src = 'https://docs.opencv.org/4.x/opencv.js';
-      script.async = true;
-      script.onload = () => {
-        if (window.cv && !window.cv.isInitialized) {
-          window.cv.onRuntimeInitialized = () => {
-            window.cv.isInitialized = true;
-            setOpencvReady(true);
-            console.log("OpenCV actually worked!")
-          };
-        }
-      };
-      document.body.appendChild(script);
-    } else if (window.cv && window.cv.isInitialized) {
-      setOpencvReady(true);
-    }
-  }, []);  
 
   // -----------------------------
   // Helper functions for coordinate conversion
@@ -49,13 +25,69 @@ function App() {
     return [landmark.x * frameShape.width, landmark.y * frameShape.height, 0];
   };
 
+  /**
+   * Custom least-squares solution to estimate a 3D affine transform.
+   *
+   * @param {cv.Mat} src - Source 3D points (N x 3, CV_64F).
+   * @param {cv.Mat} dst - Destination 3D points (N x 3, CV_64F).
+   * @returns {{success: boolean, transformation: cv.Mat|null}} - Object containing the success flag and the transformation (3 x 4) if successful.
+   */
+  const estimateAffine3DCustom = (cv, src, dst) => {
+    // Ensure there are enough points (at least 4) to compute a robust affine transform.
+    let N = src.rows;
+    if (N < 4) {
+      console.log("Need at least 4 points to estimate an affine transform");
+      return { success: false, transformation: null };
+    }
+
+    // Create matrix X of size (N x 4): each row is [x, y, z, 1] from src.
+    let X = new cv.Mat(N, 4, cv.CV_64F);
+    for (let i = 0; i < N; i++) {
+      X.data64F[i * 4 + 0] = src.data64F[i * 3 + 0];
+      X.data64F[i * 4 + 1] = src.data64F[i * 3 + 1];
+      X.data64F[i * 4 + 2] = src.data64F[i * 3 + 2];
+      X.data64F[i * 4 + 3] = 1.0;
+    }
+
+    // Y is the destination matrix (N x 3). We assume dst is already of correct size and type.
+    let Y = dst; // (N x 3)
+
+    // Compute Xᵀ (transpose of X)
+    let Xt = new cv.Mat();
+    cv.transpose(X, Xt);
+
+    // Compute XtX = Xᵀ * X (4 x 4 matrix)
+    let XtX = new cv.Mat();
+    cv.gemm(Xt, X, 1, new cv.Mat(), 0, XtX);
+
+    // Invert XtX (using SVD for numerical stability)
+    let XtX_inv = new cv.Mat();
+    cv.invert(XtX, XtX_inv, cv.DECOMP_SVD);
+
+    // Compute XtY = Xᵀ * Y (4 x 3 matrix)
+    let XtY = new cv.Mat();
+    cv.gemm(Xt, Y, 1, new cv.Mat(), 0, XtY);
+
+    // Solve for A: A = (XᵀX)⁻¹ * (XᵀY), A will be a 4 x 3 matrix.
+    let A = new cv.Mat();
+    cv.gemm(XtX_inv, XtY, 1, new cv.Mat(), 0, A);
+
+    // The affine transformation T is the transpose of A, making T a 3 x 4 matrix.
+    let T = new cv.Mat();
+    cv.transpose(A, T);
+
+    // Clean up temporary matrices.
+    X.delete(); Xt.delete(); XtX.delete(); XtX_inv.delete(); XtY.delete(); A.delete();
+    return { success: true, transformation: T };
+  }
+
   // -----------------------------
   // Draw gaze direction based on landmarks.
   // This function converts the Python logic to JS using OpenCV.js.
   // -----------------------------
-  const drawGaze = (frame, landmarks, canvasCtx) => {
+  const drawGaze = async (frame, landmarks, canvasCtx) => {
     // Use window.cv since OpenCV.js attaches to window.
-    const cv = window.cv;
+    const cv = await window.cv;
     if (!cv) return; // Extra safety check
 
     const frameShape = { width: frame.videoWidth, height: frame.videoHeight };
@@ -115,11 +147,8 @@ function App() {
     // Get left pupil coordinates (using landmark index 468)
     const leftPupil = relative(landmarks[468], frameShape);
 
-    let transformation = new cv.Mat();
-    let inliers = new cv.Mat();
-    let affineSuccess = cv.estimateAffine3D(imagePoints1Mat, modelPoints, transformation, inliers);
-
-    if (affineSuccess) {
+    const { success, transformation } = estimateAffine3DCustom(cv, imagePoints1Mat, modelPoints);
+    if (success) {
       let pupilVec = cv.matFromArray(4, 1, cv.CV_64F, [leftPupil[0], leftPupil[1], 0, 1]);
       let pupilWorld = new cv.Mat();
       cv.gemm(transformation, pupilVec, 1, new cv.Mat(), 0, pupilWorld);
@@ -129,7 +158,10 @@ function App() {
       cv.subtract(pupilWorld3, eyeBallCenterLeft, diff);
 
       let scaledDiff = new cv.Mat();
-      cv.multiply(diff, new cv.Scalar(10, 10, 10, 10), scaledDiff);
+      let broadcastMat = new cv.Mat(diff.rows, diff.cols, diff.type());
+      broadcastMat.setTo(new cv.Scalar(10));
+      cv.multiply(diff, broadcastMat, scaledDiff);
+      broadcastMat.delete();
 
       let S = new cv.Mat();
       cv.add(eyeBallCenterLeft, scaledDiff, S);
@@ -176,7 +208,6 @@ function App() {
     rvec.delete();
     tvec.delete();
     transformation.delete();
-    inliers.delete();
   };
 
   // -----------------------------
@@ -227,6 +258,7 @@ function App() {
   // Continuously predict using the webcam stream.
   // -----------------------------
   const predictWebcam = async () => {
+    // console.log((await window.cv).projectPoints);
     const video = videoRef.current;
     const canvasElement = outputCanvasRef.current;
     const canvasCtx = canvasElement.getContext("2d");
@@ -291,10 +323,8 @@ function App() {
             { color: "#30FF30" }
           );
 
-          // Only attempt gaze estimation if OpenCV.js is ready.
-          if (opencvReady) {
-            drawGaze(video, landmarks, canvasCtx);
-          }
+          // Gaze estimation
+          drawGaze(video, landmarks, canvasCtx);
         });
       }
     }
