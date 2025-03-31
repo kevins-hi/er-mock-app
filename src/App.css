@@ -66,6 +66,12 @@ footer {
   cursor: pointer;
 }
 
+/* Reserve space for the absolutely positioned video and canvas.
+   This targets the container div inside .videoView and gives it a fixed height. */
+.videoView > div {
+  height: 360px;
+}
+
 .videoView p,
 .detectOnClick p {
   position: absolute;
@@ -105,6 +111,19 @@ footer {
   width: 100%;
 }
 
+/* Hide the enable webcam button when removed */
 .mdc-button.mdc-button--raised.removed {
   display: none;
+}
+
+/* 
+   Hide the tracking button by default.
+   When the enable webcam button is removed (has class "removed"),
+   display the tracking button.
+*/
+.trackingButton {
+  display: none;
+}
+.mdc-button.mdc-button--raised.removed ~ .trackingButton {
+  display: inline-block;
 }

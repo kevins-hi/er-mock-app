@@ -8,11 +8,27 @@ function App() {
   const [faceLandmarker, setFaceLandmarker] = useState(null);
   const [runningMode, setRunningMode] = useState("VIDEO");
   const [webcamRunning, setWebcamRunning] = useState(true);
+  
+  // New state for tracking.
+  const [tracking, setTracking] = useState(false);
+  const [trackingData, setTrackingData] = useState([]);
+  // New state for timer (elapsed time in milliseconds).
+  const [trackingElapsedTime, setTrackingElapsedTime] = useState(0);
+
+  // Refs for accumulating per-frame tracking data.
+  const trackingBufferRef = useRef([]);
+  const lastTrackingTimestampRef = useRef(Date.now());
+  
+  // Use a ref to capture the latest tracking state for use in async functions.
+  const trackingRef = useRef(tracking);
+  useEffect(() => {
+    trackingRef.current = tracking;
+  }, [tracking]);
+  
   const demosSectionRef = useRef(null);
   const videoRef = useRef(null);
   const outputCanvasRef = useRef(null);
   const webcamButtonRef = useRef(null);
-  const lastVideoTimeRef = useRef(-1);
 
   // -----------------------------
   // Helper functions for coordinate conversion
@@ -253,7 +269,7 @@ function App() {
     }
   
     // -----------------------------
-    // New: Determine if the user is looking at the screen.
+    // Determine if the user is looking at the screen.
     // -----------------------------
     // Compute average pupil position.
     const avgPupil = [
@@ -289,6 +305,27 @@ function App() {
     canvasCtx.fillStyle = "blue";
     canvasCtx.fillText(`Looking: ${isLooking}`, canvasCtx.canvas.width - 390, 30);
     canvasCtx.restore();    
+
+    // -----------------------------
+    // Tracking: accumulate per-frame booleans and perform majority vote every second.
+    // -----------------------------
+    if (trackingRef.current) {
+      const now = Date.now();
+      trackingBufferRef.current.push(isLooking);
+      if (now - lastTrackingTimestampRef.current >= 1000) {
+        const trueCount = trackingBufferRef.current.filter(val => val).length;
+        const total = trackingBufferRef.current.length;
+        const majority = trueCount > total / 2; // if tie, defaults to false.
+        // Append tuple with the majority result and current timestamp.
+        setTrackingData(prevData => [
+          ...prevData,
+          { isLooking: majority, timestamp: new Date().toLocaleTimeString() }
+        ]);
+        // Reset the buffer and timestamp for the next second.
+        trackingBufferRef.current = [];
+        lastTrackingTimestampRef.current = now;
+      }
+    }
   
     // Clean up common matrices.
     imagePointsMat.delete();
@@ -348,6 +385,37 @@ function App() {
   };
 
   // -----------------------------
+  // Toggle tracking on/off.
+  // -----------------------------
+  const toggleTracking = () => {
+    if (!tracking) {
+      // Reset tracking buffer, timestamp, and timer when starting.
+      trackingBufferRef.current = [];
+      lastTrackingTimestampRef.current = Date.now();
+      setTrackingData([]);
+    }
+    setTracking(!tracking);
+  };
+
+  // -----------------------------
+  // Timer useEffect: updates elapsed time when tracking is active.
+  // -----------------------------
+  useEffect(() => {
+    let interval = null;
+    if (tracking) {
+      const startTime = Date.now();
+      interval = setInterval(() => {
+        setTrackingElapsedTime(Date.now() - startTime);
+      }, 1000);
+    } else {
+      setTrackingElapsedTime(0);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [tracking]);
+
+  // -----------------------------
   // Continuously predict using the webcam stream.
   // -----------------------------
   const predictWebcam = async () => {
@@ -363,62 +431,59 @@ function App() {
     canvasElement.height = video.videoHeight;
 
     const startTimeMs = performance.now();
-    if (lastVideoTimeRef.current !== video.currentTime) {
-      lastVideoTimeRef.current = video.currentTime;
-      const results = await faceLandmarker.detectForVideo(video, startTimeMs);
-      if (results.faceLandmarks) {
-        const drawingUtils = new DrawingUtils(canvasCtx);
-        results.faceLandmarks.forEach((landmarks) => {
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_TESSELATION,
-            { color: "#C0C0C070", lineWidth: 1 }
-          );
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
-            { color: "#FF3030" }
-          );
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
-            { color: "#FF3030" }
-          );
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
-            { color: "#30FF30" }
-          );
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
-            { color: "#30FF30" }
-          );
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_FACE_OVAL,
-            { color: "#E0E0E0" }
-          );
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_LIPS,
-            { color: "#E0E0E0" }
-          );
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
-            { color: "#FF3030" }
-          );
-          drawingUtils.drawConnectors(
-            landmarks,
-            FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS,
-            { color: "#30FF30" }
-          );
+    const results = await faceLandmarker.detectForVideo(video, startTimeMs);
+    if (results.faceLandmarks) {
+      const drawingUtils = new DrawingUtils(canvasCtx);
+      results.faceLandmarks.forEach((landmarks) => {
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_TESSELATION,
+          { color: "#C0C0C070", lineWidth: 1 }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
+          { color: "#FF3030" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
+          { color: "#FF3030" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
+          { color: "#30FF30" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
+          { color: "#30FF30" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_FACE_OVAL,
+          { color: "#E0E0E0" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_LIPS,
+          { color: "#E0E0E0" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
+          { color: "#FF3030" }
+        );
+        drawingUtils.drawConnectors(
+          landmarks,
+          FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS,
+          { color: "#30FF30" }
+        );
 
-          // Gaze estimation for both eyes.
-          drawGaze(video, landmarks, canvasCtx);
-        });
-      }
+        // Gaze estimation for both eyes.
+        drawGaze(video, landmarks, canvasCtx);
+      });
     }
     if (webcamRunning) {
       window.requestAnimationFrame(predictWebcam);
@@ -457,6 +522,31 @@ function App() {
               style={{ position: "absolute", left: 0, top: 0 }}
             ></canvas>
           </div>
+          {/* New Tracking Button below the video feed */}
+          <button
+            onClick={toggleTracking}
+            className="mdc-button mdc-button--raised trackingButton"
+            style={{ marginTop: "20px" }}
+          >
+            <span className="mdc-button__label">
+              {tracking ? "Stop Tracking" : "Start Tracking"}
+              {/* Display the elapsed time in seconds if tracking is active */}
+              {tracking && ` (${Math.floor(trackingElapsedTime / 1000)}s)`}
+            </span>
+          </button>
+          {/* Display tracking data when tracking is stopped */}
+          {!tracking && trackingData.length > 0 && (
+            <div className="tracking-data" style={{ marginTop: "20px" }}>
+              <h3>Tracking Data</h3>
+              <ul>
+                {trackingData.map((item, index) => (
+                  <li key={index}>
+                    {item.timestamp}: {item.isLooking ? "Looking" : "Not Looking"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </section>
     </div>
