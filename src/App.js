@@ -89,9 +89,9 @@ function App() {
     // Use window.cv since OpenCV.js attaches to window.
     const cv = await window.cv;
     if (!cv) return; // Extra safety check
-
+  
     const frameShape = { width: frame.videoWidth, height: frame.videoHeight };
-
+  
     // Prepare 2D image points (for solvePnP)
     const imagePoints = [
       relative(landmarks[4], frameShape),    // Nose tip
@@ -101,7 +101,7 @@ function App() {
       relative(landmarks[287], frameShape),    // Left Mouth corner
       relative(landmarks[57], frameShape)      // Right mouth corner
     ];
-
+  
     // Prepare image points with zero z-value (for estimateAffine3D)
     const imagePoints1 = [
       relativeT(landmarks[4], frameShape),
@@ -111,13 +111,13 @@ function App() {
       relativeT(landmarks[287], frameShape),
       relativeT(landmarks[57], frameShape)
     ];
-
+  
     const flattenPoints = (points) =>
       points.reduce((acc, val) => acc.concat(val), []);
-
+  
     let imagePointsMat = cv.matFromArray(6, 2, cv.CV_64F, flattenPoints(imagePoints));
     let imagePoints1Mat = cv.matFromArray(6, 3, cv.CV_64F, flattenPoints(imagePoints1));
-
+  
     let modelPoints = cv.matFromArray(6, 3, cv.CV_64F, [
       0.0, 0.0, 0.0,         // Nose tip
       0.0, -63.6, -12.5,      // Chin
@@ -126,10 +126,10 @@ function App() {
       -28.9, -28.9, -24.1,     // Left Mouth corner
       28.9, -28.9, -24.1       // Right mouth corner
     ]);
-
+  
     let eyeBallCenterRight = cv.matFromArray(3, 1, cv.CV_64F, [-29.05, 32.7, -39.5]);
     let eyeBallCenterLeft = cv.matFromArray(3, 1, cv.CV_64F, [29.05, 32.7, -39.5]);
-
+  
     let focalLength = frameShape.width;
     let center = [frameShape.width / 2, frameShape.height / 2];
     let cameraMatrix = cv.matFromArray(3, 3, cv.CV_64F, [
@@ -137,51 +137,52 @@ function App() {
       0, focalLength, center[1],
       0, 0, 1
     ]);
-
+  
     let distCoeffs = cv.Mat.zeros(4, 1, cv.CV_64F);
-
+  
     let rvec = new cv.Mat();
     let tvec = new cv.Mat();
     cv.solvePnP(modelPoints, imagePointsMat, cameraMatrix, distCoeffs, rvec, tvec, false, cv.SOLVEPNP_ITERATIVE);
-
+  
     // Extract pupil coordinates
     const leftPupil = relative(landmarks[468], frameShape);
     const rightPupil = relative(landmarks[473], frameShape);
-
+  
     const { success, transformation } = estimateAffine3DCustom(cv, imagePoints1Mat, modelPoints);
+    let gazeLeft, gazeRight;
     if (success) {
       // ---- Left Eye Gaze Estimation ----
       let leftPupilVec = cv.matFromArray(4, 1, cv.CV_64F, [leftPupil[0], leftPupil[1], 0, 1]);
       let leftPupilWorld = new cv.Mat();
       cv.gemm(transformation, leftPupilVec, 1, new cv.Mat(), 0, leftPupilWorld);
-
+  
       let diffLeft = new cv.Mat();
       let leftPupilWorld3 = leftPupilWorld.rowRange(0, 3);
       cv.subtract(leftPupilWorld3, eyeBallCenterLeft, diffLeft);
-
+  
       let scaledDiffLeft = new cv.Mat();
       let broadcastMatLeft = new cv.Mat(diffLeft.rows, diffLeft.cols, diffLeft.type());
       broadcastMatLeft.setTo(new cv.Scalar(10));
       cv.multiply(diffLeft, broadcastMatLeft, scaledDiffLeft);
       broadcastMatLeft.delete();
-
+  
       let SLeft = new cv.Mat();
       cv.add(eyeBallCenterLeft, scaledDiffLeft, SLeft);
-
+  
       let S_pointLeft = new cv.Mat();
       cv.projectPoints(SLeft, rvec, tvec, cameraMatrix, distCoeffs, S_pointLeft);
       let eyePupil2DLeft = [S_pointLeft.data64F[0], S_pointLeft.data64F[1]];
-
+  
       let headPointLeft = cv.matFromArray(3, 1, cv.CV_64F, [leftPupilWorld.data64F[0], leftPupilWorld.data64F[1], 40]);
       let headPoseLeft = new cv.Mat();
       cv.projectPoints(headPointLeft, rvec, tvec, cameraMatrix, distCoeffs, headPoseLeft);
       let headPose2DLeft = [headPoseLeft.data64F[0], headPoseLeft.data64F[1]];
-
-      let gazeLeft = [
+  
+      gazeLeft = [
         leftPupil[0] + (eyePupil2DLeft[0] - leftPupil[0]) - (headPose2DLeft[0] - leftPupil[0]),
         leftPupil[1] + (eyePupil2DLeft[1] - leftPupil[1]) - (headPose2DLeft[1] - leftPupil[1])
       ];
-
+  
       // Draw left gaze line.
       canvasCtx.beginPath();
       canvasCtx.moveTo(leftPupil[0], leftPupil[1]);
@@ -189,7 +190,7 @@ function App() {
       canvasCtx.strokeStyle = "blue";
       canvasCtx.lineWidth = 2;
       canvasCtx.stroke();
-
+  
       // Clean up left eye matrices.
       leftPupilVec.delete();
       leftPupilWorld.delete();
@@ -199,39 +200,39 @@ function App() {
       S_pointLeft.delete();
       headPointLeft.delete();
       headPoseLeft.delete();
-
+  
       // ---- Right Eye Gaze Estimation ----
       let rightPupilVec = cv.matFromArray(4, 1, cv.CV_64F, [rightPupil[0], rightPupil[1], 0, 1]);
       let rightPupilWorld = new cv.Mat();
       cv.gemm(transformation, rightPupilVec, 1, new cv.Mat(), 0, rightPupilWorld);
-
+  
       let diffRight = new cv.Mat();
       let rightPupilWorld3 = rightPupilWorld.rowRange(0, 3);
       cv.subtract(rightPupilWorld3, eyeBallCenterRight, diffRight);
-
+  
       let scaledDiffRight = new cv.Mat();
       let broadcastMatRight = new cv.Mat(diffRight.rows, diffRight.cols, diffRight.type());
       broadcastMatRight.setTo(new cv.Scalar(10));
       cv.multiply(diffRight, broadcastMatRight, scaledDiffRight);
       broadcastMatRight.delete();
-
+  
       let SRight = new cv.Mat();
       cv.add(eyeBallCenterRight, scaledDiffRight, SRight);
-
+  
       let S_pointRight = new cv.Mat();
       cv.projectPoints(SRight, rvec, tvec, cameraMatrix, distCoeffs, S_pointRight);
       let eyePupil2DRight = [S_pointRight.data64F[0], S_pointRight.data64F[1]];
-
+  
       let headPointRight = cv.matFromArray(3, 1, cv.CV_64F, [rightPupilWorld.data64F[0], rightPupilWorld.data64F[1], 40]);
       let headPoseRight = new cv.Mat();
       cv.projectPoints(headPointRight, rvec, tvec, cameraMatrix, distCoeffs, headPoseRight);
       let headPose2DRight = [headPoseRight.data64F[0], headPoseRight.data64F[1]];
-
-      let gazeRight = [
+  
+      gazeRight = [
         rightPupil[0] + (eyePupil2DRight[0] - rightPupil[0]) - (headPose2DRight[0] - rightPupil[0]),
         rightPupil[1] + (eyePupil2DRight[1] - rightPupil[1]) - (headPose2DRight[1] - rightPupil[1])
       ];
-
+  
       // Draw right gaze line.
       canvasCtx.beginPath();
       canvasCtx.moveTo(rightPupil[0], rightPupil[1]);
@@ -239,7 +240,7 @@ function App() {
       canvasCtx.strokeStyle = "blue";
       canvasCtx.lineWidth = 2;
       canvasCtx.stroke();
-
+  
       // Clean up right eye matrices.
       rightPupilVec.delete();
       rightPupilWorld.delete();
@@ -250,7 +251,44 @@ function App() {
       headPointRight.delete();
       headPoseRight.delete();
     }
-
+  
+    // -----------------------------
+    // New: Determine if the user is looking at the screen.
+    // -----------------------------
+    // Compute average pupil position.
+    const avgPupil = [
+      (leftPupil[0] + rightPupil[0]) / 2,
+      (leftPupil[1] + rightPupil[1]) / 2,
+    ];
+  
+    // Compute average gaze endpoint.
+    const avgGaze = [
+      (gazeLeft[0] + gazeRight[0]) / 2,
+      (gazeLeft[1] + gazeRight[1]) / 2,
+    ];
+  
+    // Calculate the gaze vector (from pupil to gaze endpoint).
+    const gazeVector = [
+      avgGaze[0] - avgPupil[0],
+      avgGaze[1] - avgPupil[1],
+    ];
+  
+    // Compute the magnitude of the gaze vector.
+    const magnitude = Math.sqrt(gazeVector[0] ** 2 + gazeVector[1] ** 2);
+  
+    // Use a threshold (in pixels) to decide if the user is looking at the screen.
+    // Adjust this threshold based on calibration.
+    const threshold = 60; 
+    const isLooking = magnitude < threshold;
+  
+    // Display the boolean on the canvas.
+    canvasCtx.save();
+    canvasCtx.setTransform(-1, 0, 0, 1, canvasCtx.canvas.width, 0);
+    canvasCtx.font = "24px Arial";
+    canvasCtx.fillStyle = "red";
+    canvasCtx.fillText(`Looking: ${isLooking}`, canvasCtx.canvas.width - 390, 30);
+    canvasCtx.restore();    
+  
     // Clean up common matrices.
     imagePointsMat.delete();
     imagePoints1Mat.delete();
@@ -262,7 +300,7 @@ function App() {
     rvec.delete();
     tvec.delete();
     if (transformation) transformation.delete();
-  };
+  };  
 
   // -----------------------------
   // Load and initialize the FaceLandmarker when the component mounts.
