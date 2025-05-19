@@ -1,592 +1,304 @@
 import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
-
-// Import MediaPipe Tasks for Vision.
-import { FaceLandmarker, FilesetResolver, DrawingUtils } from "@mediapipe/tasks-vision"; 
+import { FaceLandmarker, FilesetResolver, DrawingUtils } from "@mediapipe/tasks-vision";
 
 function App() {
   const [faceLandmarker, setFaceLandmarker] = useState(null);
-  const [runningMode, setRunningMode] = useState("VIDEO");
-  const [webcamRunning, setWebcamRunning] = useState(true);
+  const [runningMode] = useState("VIDEO");
 
   const [cameraEnabled, setCameraEnabled] = useState(false);
-  const [activeMode, setActiveMode] = useState("default"); // "default" or "gaze"
+  const [activeMode, setActiveMode] = useState("default"); // "default", "gaze", or "check"
   const activeModeRef = useRef(activeMode);
-  useEffect(() => {
-    activeModeRef.current = activeMode;
-  }, [activeMode]);
-  
-  // New state for tracking.
+  useEffect(() => { activeModeRef.current = activeMode; }, [activeMode]);
+
   const [tracking, setTracking] = useState(false);
   const [trackingData, setTrackingData] = useState([]);
-  // New state for timer (elapsed time in milliseconds).
   const [trackingElapsedTime, setTrackingElapsedTime] = useState(0);
-
-  // Refs for accumulating per-frame tracking data.
   const trackingBufferRef = useRef([]);
   const lastTrackingTimestampRef = useRef(Date.now());
-  
-  // Use a ref to capture the latest tracking state for use in async functions.
   const trackingRef = useRef(tracking);
-  useEffect(() => {
-    trackingRef.current = tracking;
-  }, [tracking]);
-  
-  const demosSectionRef = useRef(null);
+  useEffect(() => { trackingRef.current = tracking; }, [tracking]);
+
   const videoRef = useRef(null);
   const outputCanvasRef = useRef(null);
   const webcamButtonRef = useRef(null);
 
-  // -----------------------------
-  // Helper functions for coordinate conversion
-  // -----------------------------
-  const relative = (landmark, frameShape) => {
-    return [landmark.x * frameShape.width, landmark.y * frameShape.height];
-  };
+  // Coordinate helper
+  const relative = (landmark, { width, height }) => [landmark.x * width, landmark.y * height];
 
-  const relativeT = (landmark, frameShape) => {
-    return [landmark.x * frameShape.width, landmark.y * frameShape.height, 0];
-  };
-
-  /**
-   * Custom least-squares solution to estimate a 3D affine transform.
-   *
-   * @param {cv.Mat} src - Source 3D points (N x 3, CV_64F).
-   * @param {cv.Mat} dst - Destination 3D points (N x 3, CV_64F).
-   * @returns {{success: boolean, transformation: cv.Mat|null}} - Object containing the success flag and the transformation (3 x 4) if successful.
-   */
+  /** Estimate 3D affine transform via least-squares */
   const estimateAffine3DCustom = (cv, src, dst) => {
-    // Ensure there are enough points (at least 4) to compute a robust affine transform.
-    let N = src.rows;
+    const N = src.rows;
     if (N < 4) {
-      console.log("Need at least 4 points to estimate an affine transform");
+      console.warn("Need at least 4 points to estimate affine transform");
       return { success: false, transformation: null };
     }
-
-    // Create matrix X of size (N x 4): each row is [x, y, z, 1] from src.
-    let X = new cv.Mat(N, 4, cv.CV_64F);
+    const X = new cv.Mat(N, 4, cv.CV_64F);
     for (let i = 0; i < N; i++) {
-      X.data64F[i * 4 + 0] = src.data64F[i * 3 + 0];
+      X.data64F[i * 4] = src.data64F[i * 3];
       X.data64F[i * 4 + 1] = src.data64F[i * 3 + 1];
       X.data64F[i * 4 + 2] = src.data64F[i * 3 + 2];
-      X.data64F[i * 4 + 3] = 1.0;
+      X.data64F[i * 4 + 3] = 1;
     }
+    const Y = dst;
 
-    // Y is the destination matrix (N x 3). We assume dst is already of correct size and type.
-    let Y = dst; // (N x 3)
-
-    // Compute Xᵀ (transpose of X)
-    let Xt = new cv.Mat();
+    const Xt = new cv.Mat();
     cv.transpose(X, Xt);
 
-    // Compute XtX = Xᵀ * X (4 x 4 matrix)
-    let XtX = new cv.Mat();
+    const XtX = new cv.Mat();
     cv.gemm(Xt, X, 1, new cv.Mat(), 0, XtX);
 
-    // Invert XtX (using SVD for numerical stability)
-    let XtX_inv = new cv.Mat();
+    const XtX_inv = new cv.Mat();
     cv.invert(XtX, XtX_inv, cv.DECOMP_SVD);
 
-    // Compute XtY = Xᵀ * Y (4 x 3 matrix)
-    let XtY = new cv.Mat();
+    const XtY = new cv.Mat();
     cv.gemm(Xt, Y, 1, new cv.Mat(), 0, XtY);
 
-    // Solve for A: A = (XᵀX)⁻¹ * (XᵀY), A will be a 4 x 3 matrix.
-    let A = new cv.Mat();
+    const A = new cv.Mat();
     cv.gemm(XtX_inv, XtY, 1, new cv.Mat(), 0, A);
 
-    // The affine transformation T is the transpose of A, making T a 3 x 4 matrix.
-    let T = new cv.Mat();
+    const T = new cv.Mat();
     cv.transpose(A, T);
 
-    // Clean up temporary matrices.
-    X.delete(); Xt.delete(); XtX.delete(); XtX_inv.delete(); XtY.delete(); A.delete();
+    [X, Xt, XtX, XtX_inv, XtY, A].forEach((m) => m.delete());
     return { success: true, transformation: T };
   };
 
-  // -----------------------------
-  // Draw gaze direction based on landmarks.
-  // Updated to compute gaze for both left and right pupils.
-  // -----------------------------
-  const drawGaze = async (frame, landmarks, canvasCtx) => {
+  // Draw gaze based on landmarks
+  const drawGaze = async (frame, landmarks, ctx) => {
     if (activeModeRef.current !== "gaze") return;
-
-    // Use window.cv since OpenCV.js attaches to window.
     const cv = await window.cv;
-    if (!cv) return; // Extra safety check
-  
+    if (!cv) return;
     const frameShape = { width: frame.videoWidth, height: frame.videoHeight };
-  
-    // Prepare 2D image points (for solvePnP)
-    const imagePoints = [
-      relative(landmarks[4], frameShape),    // Nose tip
-      relative(landmarks[152], frameShape),    // Chin
-      relative(landmarks[263], frameShape),    // Left eye left corner
-      relative(landmarks[33], frameShape),     // Right eye right corner
-      relative(landmarks[287], frameShape),    // Left Mouth corner
-      relative(landmarks[57], frameShape)      // Right mouth corner
-    ];
-  
-    // Prepare image points with zero z-value (for estimateAffine3D)
-    const imagePoints1 = [
-      relativeT(landmarks[4], frameShape),
-      relativeT(landmarks[152], frameShape),
-      relativeT(landmarks[263], frameShape),
-      relativeT(landmarks[33], frameShape),
-      relativeT(landmarks[287], frameShape),
-      relativeT(landmarks[57], frameShape)
-    ];
-  
-    const flattenPoints = (points) =>
-      points.reduce((acc, val) => acc.concat(val), []);
-  
-    let imagePointsMat = cv.matFromArray(6, 2, cv.CV_64F, flattenPoints(imagePoints));
-    let imagePoints1Mat = cv.matFromArray(6, 3, cv.CV_64F, flattenPoints(imagePoints1));
-  
-    let modelPoints = cv.matFromArray(6, 3, cv.CV_64F, [
-      0.0, 0.0, 0.0,         // Nose tip
-      0.0, -63.6, -12.5,      // Chin
-      -43.3, 32.7, -26,       // Left eye, left corner
-      43.3, 32.7, -26,        // Right eye, right corner
-      -28.9, -28.9, -24.1,     // Left Mouth corner
-      28.9, -28.9, -24.1       // Right mouth corner
+
+    // 2D & 3D image points for pose estimation
+    const imgPoints2D = [4,152,263,33,287,57].map(i => relative(landmarks[i], frameShape));
+    const imgPoints3D = imgPoints2D.map(([x,y]) => [x,y,0]);
+    const flat2D = imgPoints2D.flat();
+    const flat3D = imgPoints3D.flat();
+
+    const mat2D = cv.matFromArray(6, 2, cv.CV_64F, flat2D);
+    const mat3D = cv.matFromArray(6, 3, cv.CV_64F, flat3D);
+
+    const modelPts = cv.matFromArray(6, 3, cv.CV_64F, [
+      0,0,0,    0,-63.6,-12.5,
+      -43.3,32.7,-26, 43.3,32.7,-26,
+      -28.9,-28.9,-24.1, 28.9,-28.9,-24.1
     ]);
-  
-    let eyeBallCenterRight = cv.matFromArray(3, 1, cv.CV_64F, [-29.05, 32.7, -39.5]);
-    let eyeBallCenterLeft = cv.matFromArray(3, 1, cv.CV_64F, [29.05, 32.7, -39.5]);
-  
-    let focalLength = frameShape.width;
-    let center = [frameShape.width / 2, frameShape.height / 2];
-    let cameraMatrix = cv.matFromArray(3, 3, cv.CV_64F, [
-      focalLength, 0, center[0],
-      0, focalLength, center[1],
-      0, 0, 1
+    const eyeCenterL = cv.matFromArray(3,1,cv.CV_64F,[29.05,32.7,-39.5]);
+    const eyeCenterR = cv.matFromArray(3,1,cv.CV_64F,[-29.05,32.7,-39.5]);
+
+    const focal = frameShape.width;
+    const center = [focal/2, frameShape.height/2];
+    const cameraM = cv.matFromArray(3,3,cv.CV_64F,[
+      focal,0,center[0], 0,focal,center[1], 0,0,1
     ]);
-  
-    let distCoeffs = cv.Mat.zeros(4, 1, cv.CV_64F);
-  
-    let rvec = new cv.Mat();
-    let tvec = new cv.Mat();
-    cv.solvePnP(modelPoints, imagePointsMat, cameraMatrix, distCoeffs, rvec, tvec, false, cv.SOLVEPNP_ITERATIVE);
-  
-    // Extract pupil coordinates
-    const leftPupil = relative(landmarks[468], frameShape);
-    const rightPupil = relative(landmarks[473], frameShape);
-  
-    const { success, transformation } = estimateAffine3DCustom(cv, imagePoints1Mat, modelPoints);
-    let gazeLeft, gazeRight;
+    const dist = cv.Mat.zeros(4,1,cv.CV_64F);
+    const rvec = new cv.Mat(), tvec = new cv.Mat();
+    cv.solvePnP(modelPts, mat2D, cameraM, dist, rvec, tvec, false, cv.SOLVEPNP_ITERATIVE);
+
+    const [lx,ly] = relative(landmarks[468], frameShape);
+    const [rx,ry] = relative(landmarks[473], frameShape);
+
+    const { success, transformation } = estimateAffine3DCustom(cv, mat3D, modelPts);
+    let gazeL, gazeR;
     if (success) {
-      // ---- Left Eye Gaze Estimation ----
-      let leftPupilVec = cv.matFromArray(4, 1, cv.CV_64F, [leftPupil[0], leftPupil[1], 0, 1]);
-      let leftPupilWorld = new cv.Mat();
-      cv.gemm(transformation, leftPupilVec, 1, new cv.Mat(), 0, leftPupilWorld);
-  
-      let diffLeft = new cv.Mat();
-      let leftPupilWorld3 = leftPupilWorld.rowRange(0, 3);
-      cv.subtract(leftPupilWorld3, eyeBallCenterLeft, diffLeft);
-  
-      let scaledDiffLeft = new cv.Mat();
-      let broadcastMatLeft = new cv.Mat(diffLeft.rows, diffLeft.cols, diffLeft.type());
-      broadcastMatLeft.setTo(new cv.Scalar(10));
-      cv.multiply(diffLeft, broadcastMatLeft, scaledDiffLeft);
-      broadcastMatLeft.delete();
-  
-      let SLeft = new cv.Mat();
-      cv.add(eyeBallCenterLeft, scaledDiffLeft, SLeft);
-  
-      let S_pointLeft = new cv.Mat();
-      cv.projectPoints(SLeft, rvec, tvec, cameraMatrix, distCoeffs, S_pointLeft);
-      let eyePupil2DLeft = [S_pointLeft.data64F[0], S_pointLeft.data64F[1]];
-  
-      let headPointLeft = cv.matFromArray(3, 1, cv.CV_64F, [leftPupilWorld.data64F[0], leftPupilWorld.data64F[1], 40]);
-      let headPoseLeft = new cv.Mat();
-      cv.projectPoints(headPointLeft, rvec, tvec, cameraMatrix, distCoeffs, headPoseLeft);
-      let headPose2DLeft = [headPoseLeft.data64F[0], headPoseLeft.data64F[1]];
-  
-      gazeLeft = [
-        leftPupil[0] + (eyePupil2DLeft[0] - leftPupil[0]) - (headPose2DLeft[0] - leftPupil[0]),
-        leftPupil[1] + (eyePupil2DLeft[1] - leftPupil[1]) - (headPose2DLeft[1] - leftPupil[1])
-      ];
-  
-      // Draw left gaze line.
-      canvasCtx.beginPath();
-      canvasCtx.moveTo(leftPupil[0], leftPupil[1]);
-      canvasCtx.lineTo(gazeLeft[0], gazeLeft[1]);
-      canvasCtx.strokeStyle = "blue";
-      canvasCtx.lineWidth = 2;
-      canvasCtx.stroke();
-  
-      // Clean up left eye matrices.
-      leftPupilVec.delete();
-      leftPupilWorld.delete();
-      diffLeft.delete();
-      scaledDiffLeft.delete();
-      SLeft.delete();
-      S_pointLeft.delete();
-      headPointLeft.delete();
-      headPoseLeft.delete();
-  
-      // ---- Right Eye Gaze Estimation ----
-      let rightPupilVec = cv.matFromArray(4, 1, cv.CV_64F, [rightPupil[0], rightPupil[1], 0, 1]);
-      let rightPupilWorld = new cv.Mat();
-      cv.gemm(transformation, rightPupilVec, 1, new cv.Mat(), 0, rightPupilWorld);
-  
-      let diffRight = new cv.Mat();
-      let rightPupilWorld3 = rightPupilWorld.rowRange(0, 3);
-      cv.subtract(rightPupilWorld3, eyeBallCenterRight, diffRight);
-  
-      let scaledDiffRight = new cv.Mat();
-      let broadcastMatRight = new cv.Mat(diffRight.rows, diffRight.cols, diffRight.type());
-      broadcastMatRight.setTo(new cv.Scalar(10));
-      cv.multiply(diffRight, broadcastMatRight, scaledDiffRight);
-      broadcastMatRight.delete();
-  
-      let SRight = new cv.Mat();
-      cv.add(eyeBallCenterRight, scaledDiffRight, SRight);
-  
-      let S_pointRight = new cv.Mat();
-      cv.projectPoints(SRight, rvec, tvec, cameraMatrix, distCoeffs, S_pointRight);
-      let eyePupil2DRight = [S_pointRight.data64F[0], S_pointRight.data64F[1]];
-  
-      let headPointRight = cv.matFromArray(3, 1, cv.CV_64F, [rightPupilWorld.data64F[0], rightPupilWorld.data64F[1], 40]);
-      let headPoseRight = new cv.Mat();
-      cv.projectPoints(headPointRight, rvec, tvec, cameraMatrix, distCoeffs, headPoseRight);
-      let headPose2DRight = [headPoseRight.data64F[0], headPoseRight.data64F[1]];
-  
-      gazeRight = [
-        rightPupil[0] + (eyePupil2DRight[0] - rightPupil[0]) - (headPose2DRight[0] - rightPupil[0]),
-        rightPupil[1] + (eyePupil2DRight[1] - rightPupil[1]) - (headPose2DRight[1] - rightPupil[1])
-      ];
-  
-      // Draw right gaze line.
-      canvasCtx.beginPath();
-      canvasCtx.moveTo(rightPupil[0], rightPupil[1]);
-      canvasCtx.lineTo(gazeRight[0], gazeRight[1]);
-      canvasCtx.strokeStyle = "blue";
-      canvasCtx.lineWidth = 2;
-      canvasCtx.stroke();
-  
-      // Clean up right eye matrices.
-      rightPupilVec.delete();
-      rightPupilWorld.delete();
-      diffRight.delete();
-      scaledDiffRight.delete();
-      SRight.delete();
-      S_pointRight.delete();
-      headPointRight.delete();
-      headPoseRight.delete();
+      const compute = (px,py,center3) => {
+        const vec = cv.matFromArray(4,1,cv.CV_64F,[px,py,0,1]);
+        const world = new cv.Mat();
+        cv.gemm(transformation, vec, 1, new cv.Mat(), 0, world);
+        const world3 = world.rowRange(0,3);
+        const diff = new cv.Mat();
+        cv.subtract(world3, center3, diff);
+        const scale = new cv.Mat(diff.rows,diff.cols,diff.type());
+        scale.setTo(new cv.Scalar(10));
+        const scaled = new cv.Mat();
+        cv.multiply(diff, scale, scaled);
+        const endpoint = new cv.Mat();
+        cv.add(center3, scaled, endpoint);
+        const proj = new cv.Mat();
+        cv.projectPoints(endpoint, rvec, tvec, cameraM, dist, proj);
+        const head = cv.matFromArray(3,1,cv.CV_64F,[world.data64F[0],world.data64F[1],40]);
+        const hproj = new cv.Mat();
+        cv.projectPoints(head, rvec, tvec, cameraM, dist, hproj);
+        const gaze = [
+          px + (proj.data64F[0]-px) - (hproj.data64F[0]-px),
+          py + (proj.data64F[1]-py) - (hproj.data64F[1]-py)
+        ];
+        [vec,world,world3,diff,scale,scaled,endpoint,proj,head,hproj].forEach(m=>m.delete());
+        return gaze;
+      };
+      gazeL = compute(lx,ly,eyeCenterL);
+      gazeR = compute(rx,ry,eyeCenterR);
+
+      [[lx,ly,gazeL],[rx,ry,gazeR]].forEach(([sx,sy,[gx,gy]]) => {
+        ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(gx,gy);
+        ctx.strokeStyle = "blue"; ctx.lineWidth = 2; ctx.stroke();
+      });
+
+      transformation.delete();
     }
-  
-    // -----------------------------
-    // Determine if the user is looking at the screen.
-    // -----------------------------
-    // Compute average pupil position.
-    const avgPupil = [
-      (leftPupil[0] + rightPupil[0]) / 2,
-      (leftPupil[1] + rightPupil[1]) / 2,
-    ];
-  
-    // Compute average gaze endpoint.
-    const avgGaze = [
-      (gazeLeft[0] + gazeRight[0]) / 2,
-      (gazeLeft[1] + gazeRight[1]) / 2,
-    ];
-  
-    // Calculate the gaze vector (from pupil to gaze endpoint).
-    const gazeVector = [
-      avgGaze[0] - avgPupil[0],
-      avgGaze[1] - avgPupil[1],
-    ];
-  
-    // Compute the magnitude of the gaze vector.
-    const magnitude = Math.sqrt(gazeVector[0] ** 2 + gazeVector[1] ** 2);
-  
-    // Use a threshold (in pixels) to decide if the user is looking at the screen.
-    // Adjust this threshold based on calibration.
-    const threshold = 60; 
-    const isLooking = magnitude < threshold;
+
+    const avgP = [(lx+rx)/2,(ly+ry)/2];
+    const avgG = [(gazeL[0]+gazeR[0])/2,(gazeL[1]+gazeR[1])/2];
+    const vec = [avgG[0]-avgP[0],avgG[1]-avgP[1]];
+    const mag = Math.hypot(...vec);
+    const isLooking = mag < 60;
     document.body.style.backgroundColor = isLooking ? "white" : "red";
 
-    // Display the boolean on the canvas.
-    canvasCtx.save();
-    canvasCtx.setTransform(-1, 0, 0, 1, canvasCtx.canvas.width, 0);
-    canvasCtx.font = "24px Arial";
-    canvasCtx.fillStyle = "blue";
-    canvasCtx.fillText(`Looking: ${isLooking}`, canvasCtx.canvas.width - 390, 30);
-    canvasCtx.restore();    
+    ctx.save();
+    ctx.setTransform(-1,0,0,1,ctx.canvas.width,0);
+    ctx.font = "24px Arial";
+    ctx.fillStyle = "blue";
+    ctx.fillText(`Looking: ${isLooking}`, ctx.canvas.width - 390, 30);
+    ctx.restore();
 
-    // -----------------------------
-    // Tracking: accumulate per-frame booleans and perform majority vote every second.
-    // -----------------------------
     if (trackingRef.current) {
       const now = Date.now();
       trackingBufferRef.current.push(isLooking);
       if (now - lastTrackingTimestampRef.current >= 1000) {
-        const trueCount = trackingBufferRef.current.filter(val => val).length;
-        const total = trackingBufferRef.current.length;
-        const majority = trueCount > total / 2; // if tie, defaults to false.
-        // Append tuple with the majority result and current timestamp.
-        setTrackingData(prevData => [
-          ...prevData,
-          { isLooking: majority, timestamp: new Date().toLocaleTimeString() }
-        ]);
-        // Reset the buffer and timestamp for the next second.
+        const votes = trackingBufferRef.current;
+        const majority = votes.filter(Boolean).length > votes.length / 2;
+        setTrackingData(prev => [...prev, { isLooking: majority, timestamp: new Date().toLocaleTimeString() }]);
         trackingBufferRef.current = [];
         lastTrackingTimestampRef.current = now;
       }
     }
-  
-    // Clean up common matrices.
-    imagePointsMat.delete();
-    imagePoints1Mat.delete();
-    modelPoints.delete();
-    eyeBallCenterRight.delete();
-    eyeBallCenterLeft.delete();
-    cameraMatrix.delete();
-    distCoeffs.delete();
-    rvec.delete();
-    tvec.delete();
-    if (transformation) transformation.delete();
-  };  
 
-  // -----------------------------
-  // Load and initialize the FaceLandmarker when the component mounts.
-  // -----------------------------
+    [mat2D, mat3D, modelPts, eyeCenterL, eyeCenterR, cameraM, dist, rvec, tvec].forEach(m => m.delete());
+  };
+
+  // Initialize FaceLandmarker
   useEffect(() => {
-    async function createFaceLandmarker() {
-      const filesetResolver = await FilesetResolver.forVisionTasks(
+    (async () => {
+      const resolver = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
       );
-      const fl = await FaceLandmarker.createFromOptions(filesetResolver, {
-        baseOptions: {
-          modelAssetPath: "models/face_landmarker.task",
-          delegate: "GPU",
-        },
+      const fl = await FaceLandmarker.createFromOptions(resolver, {
+        baseOptions: { modelAssetPath: "models/face_landmarker.task", delegate: "GPU" },
         outputFaceBlendshapes: false,
         runningMode,
-        numFaces: 1,
+        numFaces: 1
       });
       setFaceLandmarker(fl);
-      if (demosSectionRef.current) {
-        demosSectionRef.current.classList.remove("invisible");
-      }
-    }
-    createFaceLandmarker();
+    })();
   }, [runningMode]);
 
-  // -----------------------------
-  // Enable webcam and start predictions.
-  // -----------------------------
-  const enableCam = async () => {
-    if (!faceLandmarker) {
-      console.log("Wait! faceLandmarker not loaded yet.");
-      return;
-    }
-    const video = videoRef.current;
-    if (webcamButtonRef.current) {
-      webcamButtonRef.current.classList.add("removed");
-    }
-    const constraints = { video: true };
-    navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
-      video.srcObject = stream;
-      video.addEventListener("loadeddata", predictWebcam);
+  // Enable webcam and start
+  const enableCam = () => {
+    if (!faceLandmarker) return console.warn("FaceLandmarker not loaded");
+    webcamButtonRef.current?.classList.add("removed");
+    navigator.mediaDevices.getUserMedia({ video: true }).then(stream => {
+      videoRef.current.srcObject = stream;
+      videoRef.current.addEventListener("loadeddata", predictWebcam);
       setCameraEnabled(true);
     });
   };
 
-  // -----------------------------
-  // Toggle tracking on/off.
-  // -----------------------------
+  // Toggle tracking
   const toggleTracking = () => {
     if (!tracking) {
-      // Reset tracking buffer, timestamp, and timer when starting.
       trackingBufferRef.current = [];
       lastTrackingTimestampRef.current = Date.now();
       setTrackingData([]);
     }
-    setTracking(!tracking);
+    setTracking(prev => !prev);
   };
 
-  // -----------------------------
-  // Timer useEffect: updates elapsed time when tracking is active.
-  // -----------------------------
+  // Timer for tracking elapsed time
   useEffect(() => {
-    let interval = null;
+    let interval;
     if (tracking) {
-      const startTime = Date.now();
-      interval = setInterval(() => {
-        setTrackingElapsedTime(Date.now() - startTime);
-      }, 1000);
+      const start = Date.now();
+      interval = setInterval(() => setTrackingElapsedTime(Date.now() - start), 1000);
     } else {
       setTrackingElapsedTime(0);
     }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [tracking]);
 
-  // -----------------------------
-  // Continuously predict using the webcam stream.
-  // -----------------------------
+  // Predict loop
   const predictWebcam = async () => {
     const video = videoRef.current;
-    const canvasElement = outputCanvasRef.current;
-    const canvasCtx = canvasElement.getContext("2d");
+    const canvas = outputCanvasRef.current;
+    const ctx = canvas.getContext("2d");
     const ratio = video.videoHeight / video.videoWidth;
-    video.style.width = "480px";
-    video.style.height = 480 * ratio + "px";
-    canvasElement.style.width = "480px";
-    canvasElement.style.height = 480 * ratio + "px";
-    canvasElement.width = video.videoWidth;
-    canvasElement.height = video.videoHeight;
+    const width = 480;
+    video.style.width = `${width}px`;
+    video.style.height = `${width * ratio}px`;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${width * ratio}px`;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
 
-    const startTimeMs = performance.now();
-    const results = await faceLandmarker.detectForVideo(video, startTimeMs);
+    const results = await faceLandmarker.detectForVideo(video, performance.now());
     if (results.faceLandmarks && activeModeRef.current === "gaze") {
-      const drawingUtils = new DrawingUtils(canvasCtx);
-      results.faceLandmarks.forEach((landmarks) => {
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_TESSELATION,
-          { color: "#C0C0C070", lineWidth: 1 }
-        );
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE,
-          { color: "#FF3030" }
-        );
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
-          { color: "#FF3030" }
-        );
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_LEFT_EYE,
-          { color: "#30FF30" }
-        );
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
-          { color: "#30FF30" }
-        );
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_FACE_OVAL,
-          { color: "#E0E0E0" }
-        );
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_LIPS,
-          { color: "#E0E0E0" }
-        );
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
-          { color: "#FF3030" }
-        );
-        drawingUtils.drawConnectors(
-          landmarks,
-          FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS,
-          { color: "#30FF30" }
-        );
-
-        // Gaze estimation for both eyes.
-        drawGaze(video, landmarks, canvasCtx);
+      const utils = new DrawingUtils(ctx);
+      results.faceLandmarks.forEach(landmarks => {
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#C0C0C070", lineWidth: 1 });
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYE, { color: "#FF3030" });
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW, { color: "#FF3030" });
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_LEFT_EYE, { color: "#30FF30" });
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW, { color: "#30FF30" });
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_FACE_OVAL, { color: "#E0E0E0" });
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_LIPS, { color: "#E0E0E0" });
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, { color: "#FF3030" });
+        utils.drawConnectors(landmarks, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, { color: "#30FF30" });
+        drawGaze(video, landmarks, ctx);
       });
     }
-    if (webcamRunning) {
-      window.requestAnimationFrame(predictWebcam);
-    }
+    window.requestAnimationFrame(predictWebcam);
   };
 
   return (
-<div className="App">
-  {/* Webcam button only shown before enabling camera */}
-  {!cameraEnabled ? (
-    <div className="controls">
-      <button
-        ref={webcamButtonRef}
-        className="mdc-button mdc-button--raised webcamButton"
-        onClick={enableCam}
-      >
-        <span className="mdc-button__label">ENABLE WEBCAM</span>
-      </button>
-    </div>
-  ) : (
-    <div className="controls">
-      <button
-        className="mdc-button mdc-button--raised"
-        onClick={() => setActiveMode("default")}
-      >
-        <span className="mdc-button__label">
-          {activeMode === "default" ? "✔ Default View" : "Default View"}
-        </span>
-      </button>
-      <button
-        className="mdc-button mdc-button--raised"
-        onClick={() => setActiveMode("gaze")}
-      >
-        <span className="mdc-button__label">
-          {activeMode === "gaze" ? "✔ Gaze Tracking" : "Gaze Tracking"}
-        </span>
-      </button>
-      <button
-        className="mdc-button mdc-button--raised"
-        onClick={() => setActiveMode("check")}
-      >
-        <span className="mdc-button__label">
-          {activeMode === "check" ? "✔ Check Work" : "Check Work"}
-        </span>
-      </button>
-    </div>
-  )}
+    <div className="App">
+      {!cameraEnabled ? (
+        <div className="controls">
+          <button ref={webcamButtonRef} className="mdc-button mdc-button--raised webcamButton" onClick={enableCam}>
+            <span className="mdc-button__label">ENABLE WEBCAM</span>
+          </button>
+        </div>
+      ) : (
+        <div className="controls">
+          <button className="mdc-button mdc-button--raised" onClick={() => setActiveMode("default")}>        
+            <span className="mdc-button__label">{activeMode === "default" ? "✔ Default View" : "Default View"}</span>
+          </button>
+          <button className="mdc-button mdc-button--raised" onClick={() => setActiveMode("gaze")}>        
+            <span className="mdc-button__label">{activeMode === "gaze" ? "✔ Gaze Tracking" : "Gaze Tracking"}</span>
+          </button>
+          <button className="mdc-button mdc-button--raised" onClick={() => setActiveMode("check")}>        
+            <span className="mdc-button__label">{activeMode === "check" ? "✔ Check Work" : "Check Work"}</span>
+          </button>
+        </div>
+      )}
 
-  {/* Video feed always visible */}
-  <div className="videoView">
-    <div style={{ position: "relative" }}>
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        style={{ position: "absolute" }}
-      ></video>
-      <canvas
-        ref={outputCanvasRef}
-        className="output_canvas"
-        style={{ position: "absolute", left: 0, top: 0 }}
-      ></canvas>
-    </div>
-  </div>
+      <div className="videoView">
+        <div style={{ position: "relative" }}>
+          <video ref={videoRef} autoPlay playsInline style={{ position: "absolute" }} />
+          <canvas ref={outputCanvasRef} className="output_canvas" style={{ position: "absolute", left: 0, top: 0 }} />
+        </div>
+      </div>
 
-  {/* Tracking section only shown after camera is enabled */}
-  {cameraEnabled && activeMode === "gaze" && (
-    <div className="tracking-section">
-      <button
-        onClick={toggleTracking}
-        className="mdc-button mdc-button--raised trackingButton"
-      >
-        <span className="mdc-button__label">
-          {tracking ? "Stop Tracking" : "Start Tracking"}
-          {tracking && ` (${Math.floor(trackingElapsedTime / 1000)}s)`}
-        </span>
-      </button>
-
-      {!tracking && trackingData.length > 0 && (
-        <div className="tracking-data">
-          <h3>Tracking Data</h3>
-          <ul>
-            {trackingData.map((item, index) => (
-              <li key={index}>
-                {item.timestamp}: {item.isLooking ? "Looking" : "Not Looking"}
-              </li>
-            ))}
-          </ul>
+      {cameraEnabled && activeMode === "gaze" && (
+        <div className="tracking-section">
+          <button onClick={toggleTracking} className="mdc-button mdc-button--raised trackingButton">
+            <span className="mdc-button__label">
+              {tracking ? `Stop Tracking (${Math.floor(trackingElapsedTime / 1000)}s)` : "Start Tracking"}
+            </span>
+          </button>
+          {!tracking && trackingData.length > 0 && (
+            <div className="tracking-data">
+              <h3>Tracking Data</h3>
+              <ul>
+                {trackingData.map((item, index) => (
+                  <li key={index}>{item.timestamp}: {item.isLooking ? "Looking" : "Not Looking"}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>
-  )}
-</div>
   );
 }
 
