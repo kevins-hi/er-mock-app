@@ -1,129 +1,52 @@
-/* App.css */
 .App {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 20px;
+}
+
+/* Controls section styling */
+.controls {
+  display: flex;
+  flex-direction: row;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+/* Make sure buttons show as expected */
+.webcamButton,
+.trackingButton {
+  display: inline-block;
+}
+
+/* VideoView holds only video + canvas */
+.videoView {
+  position: relative;
+  width: 480px;
+  height: 360px;
+  margin-bottom: 20px;
+
+  transform: rotateY(180deg);
+  -webkit-transform: rotateY(180deg);
+  -moz-transform: rotateY(180deg);
+}
+
+/* Track canvas/video alignment */
+.videoView > div {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.tracking-section {
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
-/* Basic styling */
-body {
-  font-family: helvetica, arial, sans-serif;
-  margin: 2em;
-  color: #3d3d3d;
-  --mdc-theme-primary: #007f8b;
-  --mdc-theme-on-primary: #f1f3f4;
-  transition: background-color 0.3s ease;
-}
-
-h1 {
-  font-style: italic;
-  color: #007f8b;
-}
-
-h2 {
-  clear: both;
-}
-
-em {
-  font-weight: bold;
-}
-
-/* Video and image styles */
-video {
-  clear: both;
-  display: block;
-  transform: rotateY(180deg);
-  -webkit-transform: rotateY(180deg);
-  -moz-transform: rotateY(180deg);
-}
-
-section {
-  opacity: 1;
-  transition: opacity 500ms ease-in-out;
-}
-
-header,
-footer {
-  clear: both;
-}
-
-.invisible {
-  opacity: 0.2;
-}
-
-.note {
-  font-style: italic;
-  font-size: 130%;
-}
-
-.videoView,
-.detectOnClick,
-.blend-shapes {
-  position: relative;
-  float: left;
-  width: 48%;
-  margin: 2% 1%;
-  cursor: pointer;
-}
-
-/* Reserve space for the absolutely positioned video and canvas.
-   This targets the container div inside .videoView and gives it a fixed height. */
-.videoView > div {
-  height: 360px;
-}
-
-.videoView p,
-.detectOnClick p {
-  position: absolute;
-  padding: 5px;
-  background-color: #007f8b;
-  color: #fff;
-  border: 1px dashed rgba(255, 255, 255, 0.7);
-  z-index: 2;
-  font-size: 12px;
-  margin: 0;
-}
-
-.highlighter {
-  background: rgba(0, 255, 0, 0.25);
-  border: 1px dashed #fff;
-  z-index: 1;
-  position: absolute;
-}
-
-.canvas {
-  z-index: 1;
-  position: absolute;
-  pointer-events: none;
-}
-
-.output_canvas {
-  transform: rotateY(180deg);
-  -webkit-transform: rotateY(180deg);
-  -moz-transform: rotateY(180deg);
-}
-
-.detectOnClick {
-  z-index: 0;
-}
-
-.detectOnClick img {
-  width: 100%;
-}
-
-/* Hide the enable webcam button when removed */
-.mdc-button.mdc-button--raised.removed {
-  display: none;
-}
-
-/* 
-   Hide the tracking button by default.
-   When the enable webcam button is removed (has class "removed"),
-   display the tracking button.
-*/
-.trackingButton {
-  display: none;
-}
-.mdc-button.mdc-button--raised.removed ~ .trackingButton {
-  display: inline-block;
+/* Tracking data */
+.tracking-data {
+  color: #333;
+  border-radius: 8px;
+  max-width: 640px;
 }

@@ -8,6 +8,13 @@ function App() {
   const [faceLandmarker, setFaceLandmarker] = useState(null);
   const [runningMode, setRunningMode] = useState("VIDEO");
   const [webcamRunning, setWebcamRunning] = useState(true);
+
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [activeMode, setActiveMode] = useState("default"); // "default" or "gaze"
+  const activeModeRef = useRef(activeMode);
+  useEffect(() => {
+    activeModeRef.current = activeMode;
+  }, [activeMode]);
   
   // New state for tracking.
   const [tracking, setTracking] = useState(false);
@@ -102,6 +109,8 @@ function App() {
   // Updated to compute gaze for both left and right pupils.
   // -----------------------------
   const drawGaze = async (frame, landmarks, canvasCtx) => {
+    if (activeModeRef.current !== "gaze") return;
+
     // Use window.cv since OpenCV.js attaches to window.
     const cv = await window.cv;
     if (!cv) return; // Extra safety check
@@ -381,6 +390,7 @@ function App() {
     navigator.mediaDevices.getUserMedia(constraints).then((stream) => {
       video.srcObject = stream;
       video.addEventListener("loadeddata", predictWebcam);
+      setCameraEnabled(true);
     });
   };
 
@@ -432,7 +442,7 @@ function App() {
 
     const startTimeMs = performance.now();
     const results = await faceLandmarker.detectForVideo(video, startTimeMs);
-    if (results.faceLandmarks) {
+    if (results.faceLandmarks && activeModeRef.current === "gaze") {
       const drawingUtils = new DrawingUtils(canvasCtx);
       results.faceLandmarks.forEach((landmarks) => {
         drawingUtils.drawConnectors(
@@ -491,65 +501,92 @@ function App() {
   };
 
   return (
-    <div className="App">
-      <section id="demos" ref={demosSectionRef} className="invisible">
-        <h2>Demo: Webcam continuous face landmarks detection</h2>
-        <p>
-          Hold your face in front of your webcam to get real-time face
-          landmarker detection.
-          <br />
-          Click <strong>enable webcam</strong> below and grant access to the
-          webcam if prompted.
-        </p>
-        <div id="liveView" className="videoView">
-          <button
-            ref={webcamButtonRef}
-            className="mdc-button mdc-button--raised"
-            onClick={enableCam}
-          >
-            <span className="mdc-button__label">ENABLE WEBCAM</span>
-          </button>
-          <div style={{ position: "relative" }}>
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              style={{ position: "absolute" }}
-            ></video>
-            <canvas
-              ref={outputCanvasRef}
-              className="output_canvas"
-              style={{ position: "absolute", left: 0, top: 0 }}
-            ></canvas>
-          </div>
-          {/* New Tracking Button below the video feed */}
-          <button
-            onClick={toggleTracking}
-            className="mdc-button mdc-button--raised trackingButton"
-            style={{ marginTop: "20px" }}
-          >
-            <span className="mdc-button__label">
-              {tracking ? "Stop Tracking" : "Start Tracking"}
-              {/* Display the elapsed time in seconds if tracking is active */}
-              {tracking && ` (${Math.floor(trackingElapsedTime / 1000)}s)`}
-            </span>
-          </button>
-          {/* Display tracking data when tracking is stopped */}
-          {!tracking && trackingData.length > 0 && (
-            <div className="tracking-data" style={{ marginTop: "20px" }}>
-              <h3>Tracking Data</h3>
-              <ul>
-                {trackingData.map((item, index) => (
-                  <li key={index}>
-                    {item.timestamp}: {item.isLooking ? "Looking" : "Not Looking"}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      </section>
+<div className="App">
+  {/* Webcam button only shown before enabling camera */}
+  {!cameraEnabled ? (
+    <div className="controls">
+      <button
+        ref={webcamButtonRef}
+        className="mdc-button mdc-button--raised webcamButton"
+        onClick={enableCam}
+      >
+        <span className="mdc-button__label">ENABLE WEBCAM</span>
+      </button>
     </div>
+  ) : (
+    <div className="controls">
+      <button
+        className="mdc-button mdc-button--raised"
+        onClick={() => setActiveMode("default")}
+      >
+        <span className="mdc-button__label">
+          {activeMode === "default" ? "✔ Default View" : "Default View"}
+        </span>
+      </button>
+      <button
+        className="mdc-button mdc-button--raised"
+        onClick={() => setActiveMode("gaze")}
+      >
+        <span className="mdc-button__label">
+          {activeMode === "gaze" ? "✔ Gaze Tracking" : "Gaze Tracking"}
+        </span>
+      </button>
+      <button
+        className="mdc-button mdc-button--raised"
+        onClick={() => setActiveMode("check")}
+      >
+        <span className="mdc-button__label">
+          {activeMode === "check" ? "✔ Check Work" : "Check Work"}
+        </span>
+      </button>
+    </div>
+  )}
+
+  {/* Video feed always visible */}
+  <div className="videoView">
+    <div style={{ position: "relative" }}>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        style={{ position: "absolute" }}
+      ></video>
+      <canvas
+        ref={outputCanvasRef}
+        className="output_canvas"
+        style={{ position: "absolute", left: 0, top: 0 }}
+      ></canvas>
+    </div>
+  </div>
+
+  {/* Tracking section only shown after camera is enabled */}
+  {cameraEnabled && activeMode === "gaze" && (
+    <div className="tracking-section">
+      <button
+        onClick={toggleTracking}
+        className="mdc-button mdc-button--raised trackingButton"
+      >
+        <span className="mdc-button__label">
+          {tracking ? "Stop Tracking" : "Start Tracking"}
+          {tracking && ` (${Math.floor(trackingElapsedTime / 1000)}s)`}
+        </span>
+      </button>
+
+      {!tracking && trackingData.length > 0 && (
+        <div className="tracking-data">
+          <h3>Tracking Data</h3>
+          <ul>
+            {trackingData.map((item, index) => (
+              <li key={index}>
+                {item.timestamp}: {item.isLooking ? "Looking" : "Not Looking"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )}
+</div>
   );
 }
 
