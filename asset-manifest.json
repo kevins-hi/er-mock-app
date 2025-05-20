@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/er-mock-app/static/css/main.94600186.css",
-    "main.js": "/er-mock-app/static/js/main.6ee5634b.js",
+    "main.css": "/er-mock-app/static/css/main.a8a2e260.css",
+    "main.js": "/er-mock-app/static/js/main.394bfe61.js",
     "index.html": "/er-mock-app/index.html",
-    "main.94600186.css.map": "/er-mock-app/static/css/main.94600186.css.map",
-    "main.6ee5634b.js.map": "/er-mock-app/static/js/main.6ee5634b.js.map"
+    "main.a8a2e260.css.map": "/er-mock-app/static/css/main.a8a2e260.css.map",
+    "main.394bfe61.js.map": "/er-mock-app/static/js/main.394bfe61.js.map"
   },
   "entrypoints": [
-    "static/css/main.94600186.css",
-    "static/js/main.6ee5634b.js"
+    "static/css/main.a8a2e260.css",
+    "static/js/main.394bfe61.js"
   ]
 }
