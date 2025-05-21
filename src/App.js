@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 import GazeTracking from "./components/GazeTracking";
+import CheckWork from "./components/CheckWork";
 
 function App() {
   const [faceLandmarker, setFaceLandmarker] = useState(null);
@@ -101,6 +102,11 @@ function App() {
         active={activeMode}
         activeRef={activeModeRef}
         faceLandmarker={faceLandmarker}
+        videoRef={videoRef}
+        canvasRef={canvasRef}
+      />
+      <CheckWork
+        active={activeMode}
         videoRef={videoRef}
         canvasRef={canvasRef}
       />
