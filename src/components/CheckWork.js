@@ -99,12 +99,9 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
 
       // Apply HoughLines on foreground mask
       cv.HoughLines(fgMask, lines, 1, Math.PI / 180, 150);
-      setLineCount(lines.rows);
 
       // Set ±15° threshold in radians
       const angleThreshold = (15 * Math.PI) / 180;
-      const rhoThreshold = 20;  // merge lines with similar rho
-
       function isApproximatelyVerticalOrHorizontal(theta) {
         const PI = Math.PI;
         return (
@@ -127,6 +124,8 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
       }
 
       // Merge nearby lines by clustering
+      const rhoThreshold = 20; // Midpoint within rhoThreshold px
+      const thetaThreshold = (15 * Math.PI) / 180; // Angle within thetaThreshold radians
       const mergedLines = [];
       for (const line of filteredLines) {
         let merged = false;
@@ -134,7 +133,7 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
           const avgTheta = cluster.thetaSum / cluster.count;
           const avgRho = cluster.rhoSum / cluster.count;
           if (
-            Math.abs(line.theta - avgTheta) < angleThreshold &&
+            Math.abs(line.theta - avgTheta) < thetaThreshold &&
             Math.abs(line.rho - avgRho) < rhoThreshold
           ) {
             cluster.thetaSum += line.theta;
@@ -148,6 +147,7 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
           mergedLines.push({ thetaSum: line.theta, rhoSum: line.rho, count: 1 });
         }
       }
+      setLineCount(mergedLines.length);
 
       // Draw merged lines
       for (const cluster of mergedLines) {
@@ -167,7 +167,7 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
       }
 
       // Detection Heuristic
-      
+
 
       // Display
       const displayMat = showEdges ? fgMaskColor.clone() : src.clone();
