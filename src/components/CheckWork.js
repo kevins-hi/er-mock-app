@@ -1,9 +1,41 @@
 // src/components/CheckWork.js
 import React, { useEffect, useState, useRef } from "react";
+import OpenAI from "openai";
+import { z } from "zod";
+import { zodTextFormat } from "openai/helpers/zod";
+
+export const PaperCheck = z.object({
+  valid: z.boolean(),
+});
+
+export async function checkIfHoldingPaper(client, base64Image) {
+  const response = await client.responses.parse({
+    model: "gpt-4.1-nano",
+    input: [
+      { role: "system", content: "Determine if this image contains someone holding a piece of paper. Output true or false as 'valid'." },
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "Is this a photo of someone holding up a piece of paper?" },
+          {
+            type: "input_image",
+            image_url: base64Image,
+          },
+        ],
+      },
+    ],
+    text: {
+      format: zodTextFormat(PaperCheck, "paperCheck"),
+    },
+  });
+
+  return response.output_parsed.valid;
+}
 
 export default function CheckWork({ active, videoRef, canvasRef }) {
+  const client = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY, dangerouslyAllowBrowser: true });
+
   const [showEdges, setShowEdges] = useState(true);
-  // const [lineCount, setLineCount] = useState(0);
   const [detections, setDetections] = useState([]);
   const subtractorRef = useRef(null);
   const lineBufferRef = useRef([]); // stores { rho, theta, timestamp }
@@ -11,9 +43,7 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString());
   const captureCanvasRef = useRef(null);
   const [capturedImageUrl, setCapturedImageUrl] = useState(null);
-
-  // const leftCanvasRef = useRef(null);
-  // const rightCanvasRef = useRef(null);
+  const isValidationInProgressRef = useRef(false);
 
   const saveCaptureImage = async (cv, src, w, h) => {
     const captureCanvas = captureCanvasRef.current;
@@ -22,6 +52,10 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
     cv.imshow(captureCanvas, src);
     const dataUrl = captureCanvas.toDataURL("image/png");
     setCapturedImageUrl(dataUrl);
+
+    // GPT check
+    const isValid = await checkIfHoldingPaper(client, dataUrl);
+    return isValid;
   };
 
   useEffect(() => {
@@ -37,37 +71,9 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    // const leftCanvas = leftCanvasRef.current;
-    // const rightCanvas = rightCanvasRef.current;
 
     const ctx = canvas.getContext("2d");
     let animationId;
-
-    // const updateCanvasPositions = () => {
-    //   const rect = canvas.getBoundingClientRect();
-    //   Object.assign(leftCanvas.style, {
-    //     position: "fixed",
-    //     left: `${rect.left - 480}px`,
-    //     top: `${rect.top}px`,
-    //     width: "480px",
-    //     height: "360px",
-    //     zIndex: 1000,
-    //     transform: "rotateY(180deg)",
-    //     WebkitTransform: "rotateY(180deg)",
-    //     MozTransform: "rotateY(180deg)"
-    //   });
-    //   Object.assign(rightCanvas.style, {
-    //     position: "fixed",
-    //     left: `${rect.left + 480}px`,
-    //     top: `${rect.top}px`,
-    //     width: "480px",
-    //     height: "360px",
-    //     zIndex: 1000,
-    //     transform: "rotateY(180deg)",
-    //     WebkitTransform: "rotateY(180deg)",
-    //     MozTransform: "rotateY(180deg)"
-    //   });
-    // };
 
     const detectEdges = async () => {
       if (active !== "check") {
@@ -87,8 +93,6 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
       video.width = w;
       video.height = h;
 
-      // updateCanvasPositions();
-
       const src = new cv.Mat(h, w, cv.CV_8UC4);
       const cap = new cv.VideoCapture(video);
       cap.read(src);
@@ -101,6 +105,10 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
         subtractorRef.current = new cv.BackgroundSubtractorMOG2(50, 16, false);
       }
       subtractorRef.current.apply(gray, fgMask);
+
+      // Dilation increases false positives
+      // const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+      // cv.dilate(fgMask, fgMask, kernel);
 
       const lines = new cv.Mat();
       const fgMaskColor = new cv.Mat();
@@ -152,7 +160,6 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
           mergedLines.push({ thetaSum: line.theta, rhoSum: line.rho, count: 1 });
         }
       }
-      // setLineCount(mergedLines.length);
 
       // === Detection logic ===
       const now = Date.now();
@@ -174,12 +181,23 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
             Math.abs(line.theta - theta) < thetaThreshold
         ).length;
 
-        if (similarCount >= 30 && now - lastDetectionTimeRef.current > 10000) { // Detect every 10 seconds
+        if (similarCount >= 30 && now - lastDetectionTimeRef.current > 3000 && !isValidationInProgressRef.current) { // Cooldown
           detectionTriggered = true;
           lastDetectionTimeRef.current = now;
+          isValidationInProgressRef.current = true;
           const timestamp = new Date(now).toLocaleTimeString();
-          setDetections(prev => [...prev, `Detection at ${timestamp}`]);
-          saveCaptureImage(cv, src, w, h);
+          const newEntry = { message: `Detection at ${timestamp}`, valid: null };
+          setDetections(prev => [...prev, newEntry]);
+          
+          saveCaptureImage(cv, src, w, h).then(isValid => {
+            setDetections(prev => {
+              // Update only the last detection
+              const updated = [...prev];
+              updated[updated.length - 1] = { ...updated[updated.length - 1], valid: isValid };
+              return updated;
+            });
+            isValidationInProgressRef.current = false;
+          });
           break;
         }
       }
@@ -216,8 +234,6 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
 
       const displayMat = showEdges ? fgMaskColor.clone() : src.clone();
       cv.imshow(canvas, displayMat);
-      // cv.imshow(leftCanvas, gray);
-      // cv.imshow(rightCanvas, fgMask);
 
       src.delete();
       gray.delete();
@@ -245,9 +261,6 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
 
   return (
     <div>
-      {/* <div style={{ color: "black", marginBottom: "8px" }}>
-        Detected Lines: {lineCount}
-      </div> */}
       <div className="toggle-threshold" style={{ display: "flex", justifyContent: "center" }}>
         <button
           className="mdc-button mdc-button--raised toggle-button"
@@ -262,12 +275,13 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
         Current Time: {currentTime}
       </div>
       <ul style={{ color: "black", marginTop: "8px" }}>
-        {detections.slice(-3).map((msg, idx) => (
-          <li key={idx}>{msg}</li>
+        {detections.slice(-3).map((entry, idx) => (
+          <li key={idx}>
+            {entry.message}
+            {entry.valid === true ? " (✅ Valid)" : entry.valid === false ? " (❌ Invalid)" : " (⚠️ pending)"}
+          </li>
         ))}
       </ul>
-      {/* <canvas ref={leftCanvasRef} /> */}
-      {/* <canvas ref={rightCanvasRef} /> */}
       {capturedImageUrl && (
         <div style={{ marginTop: "16px", textAlign: "center" }}>
           <img
