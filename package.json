@@ -2,6 +2,7 @@
   "name": "er-mock-app",
   "version": "0.1.0",
   "private": true,
+  "homepage": "https://kevins-hi.github.io/er-mock-app",
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22-rc.20250304",
     "@testing-library/dom": "^10.4.0",
