@@ -3,14 +3,34 @@ import React, { useEffect, useState, useRef } from "react";
 
 export default function CheckWork({ active, videoRef, canvasRef }) {
   const [showEdges, setShowEdges] = useState(true);
-  const [lineCount, setLineCount] = useState(0);
+  // const [lineCount, setLineCount] = useState(0);
   const [detections, setDetections] = useState([]);
   const subtractorRef = useRef(null);
   const lineBufferRef = useRef([]); // stores { rho, theta, timestamp }
   const lastDetectionTimeRef = useRef(0);
+  const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString());
+  const captureCanvasRef = useRef(null);
+  const [capturedImageUrl, setCapturedImageUrl] = useState(null);
 
   // const leftCanvasRef = useRef(null);
   // const rightCanvasRef = useRef(null);
+
+  const saveCaptureImage = async (cv, src, w, h) => {
+    const captureCanvas = captureCanvasRef.current;
+    captureCanvas.width = w;
+    captureCanvas.height = h;
+    cv.imshow(captureCanvas, src);
+    const dataUrl = captureCanvas.toDataURL("image/png");
+    setCapturedImageUrl(dataUrl);
+  };
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setCurrentTime(new Date().toLocaleTimeString());
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, []);
 
   useEffect(() => {
     if (active !== "check" || !videoRef.current || !canvasRef.current) return;
@@ -132,7 +152,7 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
           mergedLines.push({ thetaSum: line.theta, rhoSum: line.rho, count: 1 });
         }
       }
-      setLineCount(mergedLines.length);
+      // setLineCount(mergedLines.length);
 
       // === Detection logic ===
       const now = Date.now();
@@ -154,11 +174,12 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
             Math.abs(line.theta - theta) < thetaThreshold
         ).length;
 
-        if (similarCount >= 30 && now - lastDetectionTimeRef.current > 5000) { // Detect every 5 seconds
+        if (similarCount >= 30 && now - lastDetectionTimeRef.current > 10000) { // Detect every 10 seconds
           detectionTriggered = true;
           lastDetectionTimeRef.current = now;
           const timestamp = new Date(now).toLocaleTimeString();
           setDetections(prev => [...prev, `Detection at ${timestamp}`]);
+          saveCaptureImage(cv, src, w, h);
           break;
         }
       }
@@ -224,10 +245,10 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
 
   return (
     <div>
-      <div style={{ color: "black", marginBottom: "8px" }}>
+      {/* <div style={{ color: "black", marginBottom: "8px" }}>
         Detected Lines: {lineCount}
-      </div>
-      <div className="toggle-threshold">
+      </div> */}
+      <div className="toggle-threshold" style={{ display: "flex", justifyContent: "center" }}>
         <button
           className="mdc-button mdc-button--raised toggle-button"
           onClick={() => setShowEdges(prev => !prev)}
@@ -237,13 +258,26 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
           </span>
         </button>
       </div>
+      <div style={{ color: "black", fontWeight: "bold", marginTop:"20px", marginBottom: "4px" }}>
+        Current Time: {currentTime}
+      </div>
       <ul style={{ color: "black", marginTop: "8px" }}>
-        {detections.slice(-5).map((msg, idx) => (
+        {detections.slice(-3).map((msg, idx) => (
           <li key={idx}>{msg}</li>
         ))}
       </ul>
       {/* <canvas ref={leftCanvasRef} /> */}
       {/* <canvas ref={rightCanvasRef} /> */}
+      {capturedImageUrl && (
+        <div style={{ marginTop: "16px", textAlign: "center" }}>
+          <img
+            src={capturedImageUrl}
+            alt="Detection Snapshot"
+            style={{ width: "270px", border: "1px solid #ccc" }}
+          />
+        </div>
+      )}
+      <canvas ref={captureCanvasRef} style={{ display: "none" }} />
     </div>
   );
 }
