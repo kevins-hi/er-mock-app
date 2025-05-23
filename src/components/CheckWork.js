@@ -4,51 +4,50 @@ import React, { useEffect, useState, useRef } from "react";
 export default function CheckWork({ active, videoRef, canvasRef }) {
   const [showEdges, setShowEdges] = useState(true);
   const [lineCount, setLineCount] = useState(0);
+  const [detections, setDetections] = useState([]);
   const subtractorRef = useRef(null);
+  const lineBufferRef = useRef([]); // stores { rho, theta, timestamp }
+  const lastDetectionTimeRef = useRef(0);
 
-  // Refs for extra canvases
-  const leftCanvasRef = useRef(null);
-  const rightCanvasRef = useRef(null);
+  // const leftCanvasRef = useRef(null);
+  // const rightCanvasRef = useRef(null);
 
   useEffect(() => {
     if (active !== "check" || !videoRef.current || !canvasRef.current) return;
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const leftCanvas = leftCanvasRef.current;
-    const rightCanvas = rightCanvasRef.current;
+    // const leftCanvas = leftCanvasRef.current;
+    // const rightCanvas = rightCanvasRef.current;
 
     const ctx = canvas.getContext("2d");
     let animationId;
 
-    const updateCanvasPositions = () => {
-      const rect = canvas.getBoundingClientRect();
-
-      // Fixed position relative to screen pixels
-      Object.assign(leftCanvas.style, {
-        position: "fixed",
-        left: `${rect.left - 480}px`,
-        top: `${rect.top}px`,
-        width: "480px",
-        height: "360px",
-        zIndex: 1000,
-        transform: "rotateY(180deg)",
-        WebkitTransform: "rotateY(180deg)",
-        MozTransform: "rotateY(180deg)"
-      });
-
-      Object.assign(rightCanvas.style, {
-        position: "fixed",
-        left: `${rect.left + 480}px`,
-        top: `${rect.top}px`,
-        width: "480px",
-        height: "360px",
-        zIndex: 1000,
-        transform: "rotateY(180deg)",
-        WebkitTransform: "rotateY(180deg)",
-        MozTransform: "rotateY(180deg)"
-      });
-    };
+    // const updateCanvasPositions = () => {
+    //   const rect = canvas.getBoundingClientRect();
+    //   Object.assign(leftCanvas.style, {
+    //     position: "fixed",
+    //     left: `${rect.left - 480}px`,
+    //     top: `${rect.top}px`,
+    //     width: "480px",
+    //     height: "360px",
+    //     zIndex: 1000,
+    //     transform: "rotateY(180deg)",
+    //     WebkitTransform: "rotateY(180deg)",
+    //     MozTransform: "rotateY(180deg)"
+    //   });
+    //   Object.assign(rightCanvas.style, {
+    //     position: "fixed",
+    //     left: `${rect.left + 480}px`,
+    //     top: `${rect.top}px`,
+    //     width: "480px",
+    //     height: "360px",
+    //     zIndex: 1000,
+    //     transform: "rotateY(180deg)",
+    //     WebkitTransform: "rotateY(180deg)",
+    //     MozTransform: "rotateY(180deg)"
+    //   });
+    // };
 
     const detectEdges = async () => {
       if (active !== "check") {
@@ -68,50 +67,37 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
       video.width = w;
       video.height = h;
 
-      updateCanvasPositions(); // Update canvas positions on each frame
+      // updateCanvasPositions();
 
       const src = new cv.Mat(h, w, cv.CV_8UC4);
       const cap = new cv.VideoCapture(video);
       cap.read(src);
 
-      // === Grayscale ===
       const fgMask = new cv.Mat();
       const gray = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-      // === Blur ===
-      // cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-
-      // === Background subtraction ===
       if (!subtractorRef.current) {
         subtractorRef.current = new cv.BackgroundSubtractorMOG2(50, 16, false);
       }
       subtractorRef.current.apply(gray, fgMask);
 
-      // === Dilation ===
-      // const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-      // cv.dilate(fgMask, fgMask, kernel);
-
-      // === Hough Line Detection ===
       const lines = new cv.Mat();
       const fgMaskColor = new cv.Mat();
       cv.cvtColor(fgMask, fgMaskColor, cv.COLOR_GRAY2RGBA);
 
-      // Apply HoughLines on foreground mask
       cv.HoughLines(fgMask, lines, 1, Math.PI / 180, 150);
 
-      // Set ±15° threshold in radians
       const angleThreshold = (15 * Math.PI) / 180;
-      function isApproximatelyVerticalOrHorizontal(theta) {
+      const isApproximatelyVerticalOrHorizontal = (theta) => {
         const PI = Math.PI;
         return (
-          Math.abs(theta - 0) < angleThreshold ||        // near vertical
-          Math.abs(theta - PI / 2) < angleThreshold ||   // near horizontal
-          Math.abs(theta - PI) < angleThreshold          // near vertical opposite
+          Math.abs(theta - 0) < angleThreshold ||
+          Math.abs(theta - PI / 2) < angleThreshold ||
+          Math.abs(theta - PI) < angleThreshold
         );
-      }
+      };
 
-      // Collect filtered lines
       const filteredLines = [];
       if (lines.rows < 100) {
         for (let i = 0; i < lines.rows; ++i) {
@@ -123,9 +109,8 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
         }
       }
 
-      // Merge nearby lines by clustering
-      const rhoThreshold = 20; // Midpoint within rhoThreshold px
-      const thetaThreshold = (15 * Math.PI) / 180; // Angle within thetaThreshold radians
+      const rhoThreshold = 20;
+      const thetaThreshold = (15 * Math.PI) / 180;
       const mergedLines = [];
       for (const line of filteredLines) {
         let merged = false;
@@ -149,6 +134,42 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
       }
       setLineCount(mergedLines.length);
 
+      // === Detection logic ===
+      const now = Date.now();
+      const threeSecondsAgo = now - 3000; // Time length of buffer
+
+      // Prune old entries
+      lineBufferRef.current = lineBufferRef.current.filter(
+        line => line.timestamp >= threeSecondsAgo
+      );
+
+      let detectionTriggered = false;
+      for (const merged of mergedLines) {
+        const rho = merged.rhoSum / merged.count;
+        const theta = merged.thetaSum / merged.count;
+
+        const similarCount = lineBufferRef.current.filter(
+          line =>
+            Math.abs(line.rho - rho) < rhoThreshold &&
+            Math.abs(line.theta - theta) < thetaThreshold
+        ).length;
+
+        if (similarCount >= 30 && now - lastDetectionTimeRef.current > 5000) { // Detect every 5 seconds
+          detectionTriggered = true;
+          lastDetectionTimeRef.current = now;
+          const timestamp = new Date(now).toLocaleTimeString();
+          setDetections(prev => [...prev, `Detection at ${timestamp}`]);
+          break;
+        }
+      }
+
+      // Add current lines after checking for detection
+      for (const merged of mergedLines) {
+        const rho = merged.rhoSum / merged.count;
+        const theta = merged.thetaSum / merged.count;
+        lineBufferRef.current.push({ rho, theta, timestamp: now });
+      }
+
       // Draw merged lines
       for (const cluster of mergedLines) {
         const theta = cluster.thetaSum / cluster.count;
@@ -163,19 +184,20 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
         const x2 = Math.round(x0 - 1000 * (-b));
         const y2 = Math.round(y0 - 1000 * a);
 
-        cv.line(fgMaskColor, new cv.Point(x1, y1), new cv.Point(x2, y2), new cv.Scalar(0, 0, 255, 255), 2);
+        cv.line(
+          fgMaskColor,
+          new cv.Point(x1, y1),
+          new cv.Point(x2, y2),
+          new cv.Scalar(0, 0, 255, 255),
+          2
+        );
       }
 
-      // Detection Heuristic
-
-
-      // Display
       const displayMat = showEdges ? fgMaskColor.clone() : src.clone();
       cv.imshow(canvas, displayMat);
-      cv.imshow(leftCanvas, gray);
-      cv.imshow(rightCanvas, fgMask);
+      // cv.imshow(leftCanvas, gray);
+      // cv.imshow(rightCanvas, fgMask);
 
-      // Clean up
       src.delete();
       gray.delete();
       fgMask.delete();
@@ -215,8 +237,13 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
           </span>
         </button>
       </div>
-      <canvas ref={leftCanvasRef} />
-      <canvas ref={rightCanvasRef} />
+      <ul style={{ color: "black", marginTop: "8px" }}>
+        {detections.slice(-5).map((msg, idx) => (
+          <li key={idx}>{msg}</li>
+        ))}
+      </ul>
+      {/* <canvas ref={leftCanvasRef} /> */}
+      {/* <canvas ref={rightCanvasRef} /> */}
     </div>
   );
 }
