@@ -8,6 +8,10 @@ export const PaperCheck = z.object({
   valid: z.boolean(),
 });
 
+export const PaperContent = z.object({
+  content: z.string(),
+});
+
 export async function checkIfHoldingPaper(client, base64Image) {
   const response = await client.responses.parse({
     model: "gpt-4.1-nano",
@@ -32,6 +36,30 @@ export async function checkIfHoldingPaper(client, base64Image) {
   return response.output_parsed.valid;
 }
 
+export async function parsePaperContent(client, base64Image) {
+  const response = await client.responses.parse({
+    model: "gpt-4.1",
+    input: [
+      { role: "system", content: "Determine what is written on the paper. Output the content as 'content'." },
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "What is written on the paper?" },
+          {
+            type: "input_image",
+            image_url: base64Image,
+          },
+        ],
+      },
+    ],
+    text: {
+      format: zodTextFormat(PaperContent, "paperContent"),
+    },
+  });
+
+  return response.output_parsed.content;
+}
+
 export default function CheckWork({ active, videoRef, canvasRef }) {
   const client = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY, dangerouslyAllowBrowser: true });
 
@@ -43,9 +71,12 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
   const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString());
   const captureCanvasRef = useRef(null);
   const [capturedImageUrl, setCapturedImageUrl] = useState(null);
+  const [parsedContent, setParsedContent] = useState(null);
   const isValidationInProgressRef = useRef(false);
 
   const saveCaptureImage = async (cv, src, w, h) => {
+    setParsedContent("validating...");
+
     const captureCanvas = captureCanvasRef.current;
     captureCanvas.width = w;
     captureCanvas.height = h;
@@ -55,7 +86,23 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
 
     // GPT check
     const isValid = await checkIfHoldingPaper(client, dataUrl);
-    return isValid;
+
+    // Update detections state
+    setDetections(prev => {
+      // Update only the last detection
+      const updated = [...prev];
+      updated[updated.length - 1] = { ...updated[updated.length - 1], valid: isValid };
+      return updated;
+    });
+    
+    // Reset validation flag
+    isValidationInProgressRef.current = false;
+
+    if (isValid) {
+      setParsedContent("parsing...");
+      const content = await parsePaperContent(client, dataUrl);
+      setParsedContent(content);
+    }
   };
 
   useEffect(() => {
@@ -188,16 +235,7 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
           const timestamp = new Date(now).toLocaleTimeString();
           const newEntry = { message: `Detection at ${timestamp}`, valid: null };
           setDetections(prev => [...prev, newEntry]);
-          
-          saveCaptureImage(cv, src, w, h).then(isValid => {
-            setDetections(prev => {
-              // Update only the last detection
-              const updated = [...prev];
-              updated[updated.length - 1] = { ...updated[updated.length - 1], valid: isValid };
-              return updated;
-            });
-            isValidationInProgressRef.current = false;
-          });
+          saveCaptureImage(cv, src, w, h);
           break;
         }
       }
@@ -283,12 +321,25 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
         ))}
       </ul>
       {capturedImageUrl && (
-        <div style={{ marginTop: "16px", textAlign: "center" }}>
+        <div style={{ marginTop: "16px", display: "flex", alignItems: "flex-start", justifyContent: "center", gap: "16px" }}>
           <img
             src={capturedImageUrl}
             alt="Detection Snapshot"
             style={{ width: "270px", border: "1px solid #ccc" }}
           />
+          {parsedContent && (
+            <div style={{ 
+              maxWidth: "300px", 
+              padding: "12px", 
+              border: "1px solid #ddd", 
+              borderRadius: "4px", 
+              backgroundColor: "#f9f9f9",
+              color: "black"
+            }}>
+              <h4 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: "bold" }}>Paper Content:</h4>
+              <p style={{ margin: "0", fontSize: "12px", lineHeight: "1.4" }}>{parsedContent}</p>
+            </div>
+          )}
         </div>
       )}
       <canvas ref={captureCanvasRef} style={{ display: "none" }} />
