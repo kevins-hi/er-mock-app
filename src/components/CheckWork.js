@@ -102,6 +102,8 @@ export default function CheckWork({ active, videoRef, canvasRef }) {
       setParsedContent("parsing...");
       const content = await parsePaperContent(client, dataUrl);
       setParsedContent(content);
+    } else {
+      setParsedContent("No paper detected");
     }
   };
 
