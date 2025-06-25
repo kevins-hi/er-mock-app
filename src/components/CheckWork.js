@@ -1,6 +1,6 @@
 // src/components/CheckWork.js
 import React, { useEffect, useState, useRef } from "react";
-import OpenAI from "openai";
+import { AzureOpenAI } from "openai";
 import { z } from "zod";
 import { zodTextFormat } from "openai/helpers/zod";
 
@@ -61,7 +61,12 @@ export async function parsePaperContent(client, base64Image) {
 }
 
 export default function CheckWork({ active, videoRef, canvasRef }) {
-  const client = new OpenAI({ apiKey: process.env.REACT_APP_OPENAI_API_KEY, dangerouslyAllowBrowser: true });
+  const client = new AzureOpenAI({ 
+    endpoint: process.env.REACT_APP_AZURE_OPENAI_ENDPOINT,
+    apiKey: process.env.REACT_APP_AZURE_OPENAI_API_KEY,
+    apiVersion: "2025-03-01-preview",
+    dangerouslyAllowBrowser: true 
+  });
 
   const [showEdges, setShowEdges] = useState(true);
   const [detections, setDetections] = useState([]);

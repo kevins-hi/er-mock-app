@@ -4,21 +4,22 @@
 
 1. Create a `.env.local` file in the base directory and add:
 
-   ```
-   REACT_APP_OPENAI_API_KEY=your-api-key
-   ```
+    ```
+    REACT_APP_AZURE_OPENAI_ENDPOINT=your-azure-openai-endpoint
+    REACT_APP_AZURE_OPENAI_API_KEY=your-azure-openai-key
+    ```
 2. Install dependencies:
 
-   ```bash
-   npm install
-   ```
+    ```bash
+    npm install
+    ```
 3. Start the development server:
 
-   ```bash
-   npm start
-   ```
+    ```bash
+    npm start
+    ```
 
 ## Requirements
 
 - Node.js
-- OpenAI API key
+- Azure OpenAI API key
